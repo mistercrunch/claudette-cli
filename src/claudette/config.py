@@ -103,7 +103,7 @@ class ClaudetteSettings(BaseSettings):
     superset_base: Optional[Path] = None
     default_branch: str = "master"
     python_version: str = "python3.11"
-    superset_repo_url: str = "https://github.com/apache/superset.git"
+    superset_repo_url: str = "git@github.com:apache/superset.git"
 
     # Optional paths
     claude_local_md: Optional[Path] = None
