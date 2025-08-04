@@ -10,6 +10,19 @@ Git worktree management for Apache Superset development, made simple. Fully load
 ![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Get Started
+
+```bash
+# Install claudette
+pip install git+https://github.com/mistercrunch/claudette-cli.git
+
+# Initialize your environment (clones Superset and sets up base config)
+claudette init
+
+# See available commands
+claudette --help
+```
+
 ## Features
 
 - 🌳 **Git Worktree Management** - Isolated branches in separate directories
