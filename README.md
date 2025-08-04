@@ -1,5 +1,7 @@
 # Claudette
 
+<img walt="Claudette" src="https://github.com/user-attachments/assets/ea21e509-2aa6-4ca6-b3e5-51248bef8395" />
+
 A modern workflow manager for Apache Superset development using git worktrees. Each project gets its own isolated Python environment, node_modules, and Docker containers on different ports.
 
 ![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)
