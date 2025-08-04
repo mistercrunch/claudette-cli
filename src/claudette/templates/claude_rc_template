@@ -1,0 +1,47 @@
+# Claude Code RC for {{PROJECT}}
+
+This is a claudette-managed Apache Superset development environment.
+
+## Important Context
+
+This is an Apache Superset development worktree, not a Flask application project. The project name "{{PROJECT}}" refers to a git branch/feature name for Superset development.
+
+You are working on the Apache Superset codebase - a modern data exploration and visualization platform. This is NOT a standalone Flask project.
+
+## Project Details
+- Git Branch: {{PROJECT}}
+- Worktree Path: {{PROJECT_PATH}}
+- Frontend Port: {{NODE_PORT}}
+- Frontend URL: http://localhost:{{NODE_PORT}}
+
+## Quick Commands
+
+Start services:
+```bash
+claudette docker up
+```
+
+Access frontend:
+```bash
+open http://localhost:{{NODE_PORT}}
+```
+
+Run tests:
+```bash
+# Backend
+pytest tests/unit_tests/
+
+# Frontend
+claudette jest
+```
+
+## Environment Details
+- Python venv: `.venv/` (auto-activated via claudette)
+- Node modules: `superset-frontend/node_modules/`
+- Docker prefix: `{{PROJECT}}_`
+
+## Development Tips
+- This is Apache Superset code, not a Flask app
+- Use `claudette docker` instead of docker-compose directly
+- The frontend dev server runs on port {{NODE_PORT}}
+- Run `pre-commit run --all-files` before committing

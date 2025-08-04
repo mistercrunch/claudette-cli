@@ -91,7 +91,7 @@ def status(
 # Progress bars
 with Progress() as progress:
     task = progress.add_task("Installing...", total=None)
-    
+
 # Tables
 table = Table(title="Projects")
 table.add_column("Name", style="cyan")
