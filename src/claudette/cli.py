@@ -82,7 +82,7 @@ class CommandRunner:
 
 app = typer.Typer(
     name="claudette",
-    help="Superset multi-environment workflow manager using git worktrees.",
+    help="Git worktree management for Apache Superset development, made simple. Fully loaded, concurrent dev environments, ready for Claude Code.",
     add_completion=True,
     rich_markup_mode="rich",
 )
@@ -274,12 +274,38 @@ def add(
                     description=f"Creating git worktree with new branch '{final_branch_name}'",
                 )
             else:
-                # Use existing branch
-                run_cmd.run(
-                    ["git", "worktree", "add", str(project_path), final_branch_name],
+                # Use existing branch (might be remote)
+                # First check if it's a remote branch that needs to be tracked
+                local_exists = run_cmd.run(
+                    ["git", "branch", "--list", final_branch_name],
                     cwd=settings.superset_base,
-                    description=f"Creating git worktree with existing branch '{final_branch_name}'",
-                )
+                    check=False,
+                    capture=True,
+                    quiet=True,
+                ).stdout.strip()
+
+                if not local_exists:
+                    # Remote branch - create local tracking branch
+                    run_cmd.run(
+                        [
+                            "git",
+                            "worktree",
+                            "add",
+                            str(project_path),
+                            "-b",
+                            final_branch_name,
+                            f"origin/{final_branch_name}",
+                        ],
+                        cwd=settings.superset_base,
+                        description=f"Creating git worktree tracking remote branch 'origin/{final_branch_name}'",
+                    )
+                else:
+                    # Local branch exists
+                    run_cmd.run(
+                        ["git", "worktree", "add", str(project_path), final_branch_name],
+                        cwd=settings.superset_base,
+                        description=f"Creating git worktree with existing branch '{final_branch_name}'",
+                    )
         except subprocess.CalledProcessError as e:
             console.print(f"[red]Error creating worktree: {e.stderr}[/red]")
             raise typer.Exit(1) from e
@@ -405,14 +431,24 @@ cd superset-frontend && npm test
     # Success!
     console.print("\n[bold green]✨ Project created successfully![/bold green]\n")
 
-    panel = Panel.fit(
-        f"""[yellow]Next steps:[/yellow]
+    # Create a table for next steps
+    next_steps_table = Table(show_header=False, box=None, padding=(0, 2))
+    next_steps_table.add_column("Command", style="cyan", no_wrap=True)
+    next_steps_table.add_column("Description", style="dim")
 
-1. claudette activate {project}
-2. claudette docker up
-3. claudette code""",
-        title="[bold]Get Started[/bold]",
+    next_steps_table.add_row(
+        f"claudette activate {project}", "Start a shell with Python venv activated"
+    )
+    next_steps_table.add_row("claudette docker up", "Start PostgreSQL database and Redis")
+    next_steps_table.add_row("claudette open", f"Open browser at http://localhost:{port}")
+    next_steps_table.add_row("claudette claude code", "Launch Claude Code with project context")
+
+    panel = Panel(
+        next_steps_table,
+        title="[bold]🚀 Get Started[/bold]",
+        subtitle=f"[dim]Project: {project} | Port: {port}[/dim]",
         border_style="green",
+        expand=False,
     )
     console.print(panel)
 
@@ -476,7 +512,9 @@ def remove(
 @app.command()
 def list() -> None:
     """📋 List all claudette projects."""
-    table = Table(title="Claudette Projects", show_header=True, header_style="bold magenta")
+    table = Table(
+        title="Claudette Projects", show_header=True, header_style="bold", title_style="bold"
+    )
     table.add_column("Project", style="cyan", no_wrap=True)
     table.add_column("Port", justify="right", style="green")
     table.add_column("Path", style="dim")
@@ -522,7 +560,16 @@ def list() -> None:
 def activate(
     project: str = typer.Argument(..., help="Project name to activate"),
 ) -> None:
-    """🚀 Activate a project: navigate to directory, start shell with venv and set PROJECT/NODE_PORT env vars."""
+    """🚀 Activate a project: start a new shell session in the project directory with venv activated.
+
+    This command starts a new bash subprocess with:
+    - Working directory set to the project path
+    - Python virtual environment activated
+    - PROJECT and NODE_PORT environment variables set
+    - Modified prompt showing the project name
+
+    Note: This creates a nested shell. Use Ctrl+D or 'exit' to return to your original shell.
+    """
     project_path = settings.worktree_base / project
     if not project_path.exists():
         console.print(f"[red]Project '{project}' not found[/red]")
@@ -559,18 +606,20 @@ if [ -n "$PS1" ] && ([ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]); then
 fi
 
 # Show activation status (using ANSI green for 'activated')
-echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m"
+echo
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m - You are now in a project shell"
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo
 echo "✓ Directory: $(pwd)"
 echo -e "✓ Virtual environment: \\033[32mactivated\\033[0m"
 echo "✓ PROJECT=$PROJECT"
 echo "✓ NODE_PORT=$NODE_PORT"
-echo "💡 Press Ctrl+D to deactivate (or 'exit' - but this may close your terminal)"
-
-# Debug: Show Python path to verify venv is activated
+echo
+echo "💡 This is a nested shell session. Press Ctrl+D to exit and return to your original shell."
 echo -e "\\033[90mPython: $(which python)\\033[0m"
+echo
 
-# Ensure we're in the right directory (in case bashrc changed it)
-cd {project_path}
 """
 
     # Write activation script to a temporary file
@@ -581,9 +630,12 @@ cd {project_path}
         temp_script = f.name
 
     try:
-        # Start interactive bash shell with our activation script
-        # Using subprocess directly to ensure we get an interactive shell
-        subprocess.run(["bash", "--rcfile", temp_script], check=False)
+        # Start bash in the project directory with our activation script
+        subprocess.run(
+            ["bash", "--rcfile", temp_script],
+            cwd=project_path,  # Start in project directory
+            check=False,
+        )
     finally:
         # Clean up temp file
         Path(temp_script).unlink(missing_ok=True)
@@ -650,18 +702,20 @@ if [ -n "$PS1" ] && ([ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]); then
 fi
 
 # Show activation status (using ANSI green for 'activated')
-echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m"
+echo
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m - You are now in a project shell"
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo
 echo "✓ Directory: $(pwd)"
 echo -e "✓ Virtual environment: \\033[32mactivated\\033[0m"
 echo "✓ PROJECT=$PROJECT"
 echo "✓ NODE_PORT=$NODE_PORT"
-echo "💡 Press Ctrl+D to deactivate (or 'exit' - but this may close your terminal)"
-
-# Debug: Show Python path to verify venv is activated
+echo
+echo "💡 This is a nested shell session. Press Ctrl+D to exit and return to your original shell."
 echo -e "\\033[90mPython: $(which python)\\033[0m"
+echo
 
-# Ensure we're in the right directory (in case bashrc changed it)
-cd {project_path}
 """
 
     # Write activation script to a temporary file
@@ -672,9 +726,12 @@ cd {project_path}
         temp_script = f.name
 
     try:
-        # Start interactive bash shell with our activation script
-        # Using subprocess directly to ensure we get an interactive shell
-        subprocess.run(["bash", "--rcfile", temp_script], check=False)
+        # Start bash in the project directory with our activation script
+        subprocess.run(
+            ["bash", "--rcfile", temp_script],
+            cwd=project_path,  # Start in project directory
+            check=False,
+        )
     finally:
         # Clean up temp file
         Path(temp_script).unlink(missing_ok=True)
@@ -710,7 +767,12 @@ def docker(
         "docker-compose-light.yml",
     ] + (args or [])
 
-    run_cmd.run(cmd, env=env, description="Running docker-compose")
+    try:
+        run_cmd.run(cmd, env=env, description="Running docker-compose")
+    except subprocess.CalledProcessError as e:
+        console.print(f"\n[red]❌ Docker command failed with exit code {e.returncode}[/red]")
+        console.print("[dim]Run with more verbosity to see details, or check Docker logs[/dim]")
+        raise typer.Exit(e.returncode) from e
 
 
 @app.command()
@@ -847,6 +909,69 @@ def nuke_db(
             console.print("  2. Run 'claudette docker down' first")
             console.print(f"  3. Check if volume exists: docker volume ls | grep {volume_name}")
             raise typer.Exit(1) from None
+
+
+@app.command()
+def open(
+    project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
+) -> None:
+    """🌐 Open Superset in your browser at the project's port."""
+    # Determine project
+    if not project:
+        # Check if PROJECT env var is set
+        project = os.environ.get("PROJECT")
+        if not project:
+            # Try to detect from current directory
+            cwd = Path.cwd()
+            if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+                project = cwd.name
+            else:
+                console.print(
+                    "[red]❌ No project specified and not in a claudette project directory[/red]"
+                )
+                console.print("[dim]Use: claudette open <project-name>[/dim]")
+                console.print(
+                    "[dim]Or: activate a project first with 'claudette activate <project-name>'[/dim]"
+                )
+                raise typer.Exit(1)
+
+    # Verify project exists
+    project_path = settings.worktree_base / project
+    if not project_path.exists():
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Load metadata to get port
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    # Build URL
+    url = f"http://localhost:{metadata.port}"
+
+    # Detect platform and open browser
+    import platform
+
+    system = platform.system()
+
+    console.print(f"[green]🌐 Opening {url} in your browser...[/green]")
+
+    try:
+        if system == "Darwin":  # macOS
+            subprocess.run(["open", url], check=True)
+        elif system == "Linux":
+            subprocess.run(["xdg-open", url], check=True)
+        elif system == "Windows":
+            subprocess.run(["start", url], shell=True, check=True)
+        else:
+            console.print(f"[yellow]⚠️  Unable to open browser on {system}[/yellow]")
+            console.print(f"[dim]Please manually open: {url}[/dim]")
+    except subprocess.CalledProcessError:
+        console.print("[red]❌ Failed to open browser[/red]")
+        console.print(f"[dim]Please manually open: {url}[/dim]")
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -1152,24 +1277,36 @@ def _is_docker_running(project_name: str) -> bool:
 
 
 def _branch_exists(branch_name: str) -> bool:
-    """Check if a git branch exists in the base repository."""
+    """Check if a git branch exists locally or remotely in the base repository."""
     try:
-        result = run_cmd.run(
+        # Check local branches
+        local_result = run_cmd.run(
             ["git", "branch", "--list", branch_name],
             cwd=settings.superset_base,
             check=False,
             capture=True,
             quiet=True,
         )
-        return bool(result.stdout.strip())
+        if local_result.stdout.strip():
+            return True
+
+        # Check remote branches
+        remote_result = run_cmd.run(
+            ["git", "branch", "-r", "--list", f"origin/{branch_name}"],
+            cwd=settings.superset_base,
+            check=False,
+            capture=True,
+            quiet=True,
+        )
+        return bool(remote_result.stdout.strip())
     except Exception:
         return False
 
 
 def _get_branch_info(branch_name: str) -> Optional[dict]:
-    """Get information about a git branch."""
+    """Get information about a git branch (local or remote)."""
     try:
-        # Get last commit info
+        # Try local branch first
         result = run_cmd.run(
             ["git", "log", "-1", "--format=%H|%s|%ar", branch_name],
             cwd=settings.superset_base,
@@ -1177,6 +1314,16 @@ def _get_branch_info(branch_name: str) -> Optional[dict]:
             capture=True,
             quiet=True,
         )
+        if not result.stdout.strip():
+            # Try remote branch
+            result = run_cmd.run(
+                ["git", "log", "-1", "--format=%H|%s|%ar", f"origin/{branch_name}"],
+                cwd=settings.superset_base,
+                check=False,
+                capture=True,
+                quiet=True,
+            )
+
         if result.stdout.strip():
             commit_hash, subject, relative_time = result.stdout.strip().split("|", 2)
             return {
@@ -1252,7 +1399,21 @@ def _handle_branch_conflict(
         return project, True
 
     # Interactive mode - show branch info and options
-    console.print(f"\n[red]❌ Branch '{project}' already exists in the git repository.[/red]\n")
+    # Check if it's local or remote
+    local_exists = run_cmd.run(
+        ["git", "branch", "--list", project],
+        cwd=settings.superset_base,
+        check=False,
+        capture=True,
+        quiet=True,
+    ).stdout.strip()
+
+    if local_exists:
+        console.print(f"\n[red]❌ Branch '{project}' already exists locally.[/red]\n")
+    else:
+        console.print(
+            f"\n[yellow]⚠️  Branch '{project}' exists in the remote repository.[/yellow]\n"
+        )
 
     # Show branch information if available
     branch_info = _get_branch_info(project)
@@ -1263,13 +1424,21 @@ def _handle_branch_conflict(
 
     # Show options
     console.print("[yellow]What would you like to do?[/yellow]")
-    console.print(
-        "  [cyan]1.[/cyan] Use existing branch (checkout and continue with existing git history)"
-    )
+    if local_exists:
+        console.print(
+            "  [cyan]1.[/cyan] Use existing local branch (checkout and continue with existing git history)"
+        )
+    else:
+        console.print(
+            "  [cyan]1.[/cyan] Pull and use remote branch (creates local tracking branch from origin)"
+        )
     console.print("  [cyan]2.[/cyan] Create new branch with different name")
-    console.print(
-        "  [cyan]3.[/cyan] DELETE existing branch and start fresh [red](⚠️  loses git history)[/red]"
-    )
+    if local_exists:
+        console.print(
+            "  [cyan]3.[/cyan] DELETE existing branch and start fresh [red](⚠️  loses git history)[/red]"
+        )
+    else:
+        console.print("  [cyan]3.[/cyan] [dim](Not available - branch only exists remotely)[/dim]")
     console.print("  [cyan]4.[/cyan] Cancel")
 
     while True:
@@ -1298,6 +1467,11 @@ def _handle_branch_conflict(
             return new_name, True
 
         elif choice == 3:  # Delete existing and recreate
+            if not local_exists:
+                console.print("[red]❌ Cannot delete a remote-only branch from here[/red]")
+                console.print("[dim]Choose option 2 to use a different branch name instead[/dim]")
+                continue
+
             console.print(
                 f"\n[red]⚠️  This will permanently delete branch '{project}' and all its git history.[/red]"
             )
@@ -1444,7 +1618,9 @@ def nuke() -> None:
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
     """
-    Claudette - Superset multi-environment workflow manager.
+    Claudette - Git worktree management for Apache Superset development, made simple.
+
+    Fully loaded, concurrent dev environments, ready for Claude Code.
 
     If no command is specified and you're in a project, launches Claude Code.
     Otherwise shows help.
