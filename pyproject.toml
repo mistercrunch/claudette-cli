@@ -47,6 +47,7 @@ dev = [
 
 [project.scripts]
 claudette = "claudette.cli:app"
+clo = "claudette.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/claudette"

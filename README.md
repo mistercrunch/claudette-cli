@@ -21,6 +21,9 @@ claudette init
 
 # See available commands
 claudette --help
+
+# Pro tip: Use 'clo' as a shorter alias for claudette!
+clo --help
 ```
 
 ## Features
@@ -49,6 +52,8 @@ cd claudette
 pip install -e .
 ```
 
+**Note:** Both `claudette` and `clo` commands will be available after installation. Use whichever you prefer!
+
 ### Prerequisites
 
 1. **Initialize Claudette**:
@@ -71,31 +76,33 @@ pip install -e .
 claudette init
 
 # Create a new project (port auto-assigned)
-claudette add my-feature
+clo add my-feature
 
 # Or specify a port
-claudette add my-feature 9007
+clo add my-feature 9007
 
 # Activate the project environment
-claudette activate my-feature
+clo activate my-feature
 
 # Start Docker containers
-claudette docker up
+clo docker up
 
 # Launch Claude with project context
-claudette claude code
+clo claude code
 
 # Check project status
-claudette status
+clo status
 
 # List all projects
-claudette list
+clo list
 
 # Clean up when done
-claudette remove my-feature
+clo remove my-feature
 ```
 
 ## Commands
+
+All commands below can be run with either `claudette` or its shorter alias `clo`.
 
 ### `claudette init`
 Initializes claudette environment:

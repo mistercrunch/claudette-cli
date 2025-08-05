@@ -111,6 +111,7 @@ def init(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
+        refresh_per_second=4,  # Reduce refresh rate to help with terminal lag
     ) as progress:
         # Create directory structure
         task = progress.add_task("Creating directory structure...", total=None)
