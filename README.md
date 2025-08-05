@@ -159,7 +159,7 @@ Launches claude CLI with project context:
 ### `claudette jest [args]` / `claudette pytest [args]`
 Run tests with project context:
 - `jest`: Frontend tests with all arguments passed to npm test
-- `pytest`: Backend tests with venv Python and common options
+- `pytest`: Backend tests using Docker with automatic test database setup
 
 ### `claudette nuke-db [project]`
 Nukes the PostgreSQL database volume:
@@ -219,9 +219,9 @@ Completely removes claudette and all projects:
 
 6. **Run tests**:
    ```bash
-   claudette pytest tests/unit_tests/
-   claudette jest --watch
-   pre-commit run --all-files
+   clo pytest tests/unit_tests/             # Backend tests via Docker
+   clo jest --watch                         # Frontend tests
+   pre-commit run --all-files               # Code quality checks
    ```
 
 7. **Check status**:
@@ -307,14 +307,18 @@ code .  # VS Code will detect the activated venv
 
 ### Running Tests in Isolation
 ```bash
-# Backend tests
-claudette pytest tests/unit_tests/
-claudette pytest -v --coverage
+# Backend tests (using Docker with automatic test DB setup)
+clo pytest tests/unit_tests/
+clo pytest -x tests/                    # Stop on first failure
+clo pytest -v tests/unit_tests/         # Verbose output
+clo pytest --nuke tests/                # Nuke and recreate test database
+clo pytest -k test_charts               # Run tests matching pattern
+clo pytest --maxfail=3 tests/           # Stop after 3 failures
 
 # Frontend tests
-claudette jest
-claudette jest --watch
-claudette jest components/Button
+clo jest
+clo jest --watch
+clo jest components/Button
 ```
 
 ### Refreshing Database

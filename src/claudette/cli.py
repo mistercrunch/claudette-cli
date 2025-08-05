@@ -1183,27 +1183,30 @@ def jest(
     )
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def pytest(
-    target: Optional[str] = typer.Argument(
-        None, help="Test file or folder to run (e.g., tests/unit_tests/, test_charts.py)"
-    ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    coverage: bool = typer.Option(False, "--coverage", "-c", help="Generate coverage report"),
-    markers: Optional[str] = typer.Option(
-        None, "--markers", "-m", help="Run tests with specific markers (e.g., 'not slow')"
-    ),
-    maxfail: Optional[int] = typer.Option(None, "--maxfail", help="Stop after N failures"),
-    pdb: bool = typer.Option(False, "--pdb", help="Drop into debugger on failures"),
+    ctx: typer.Context,  # noqa: ARG001
+    nuke: bool = typer.Option(False, "--nuke", help="Nuke and recreate the test database"),
 ) -> None:
-    """🐍 Run pytest unit tests for backend code.
+    """🐍 Run pytest using Docker with automatic test database setup.
+
+    All arguments after the options are passed directly to pytest.
 
     Examples:
-        claudette pytest                           # Run all tests
-        claudette pytest tests/unit_tests/         # Run unit tests only
-        claudette pytest test_charts.py           # Run specific test file
-        claudette pytest -v --coverage            # Verbose with coverage
-        claudette pytest -m "not slow"            # Skip slow tests
+        clo pytest                                 # Run all tests
+        clo pytest tests/unit_tests/               # Run unit tests only
+        clo pytest -x tests/                       # Stop on first failure
+        clo pytest -v tests/unit_tests/            # Verbose output
+        clo pytest --nuke tests/                   # Nuke and recreate test database
+        clo pytest -k test_charts                  # Run tests matching pattern
+        clo pytest --maxfail=3 tests/              # Stop after 3 failures
+        clo pytest -m "not slow" tests/            # Skip slow tests
+
+    Note: Uses docker-compose pytest-runner service which automatically:
+    - Creates test database on first run
+    - Reuses test environment for fast startup (~2-3 seconds)
+    - Supports all standard pytest arguments
+    - Streams test output in real-time
     """
     # Get current project
     cwd = Path.cwd()
@@ -1219,29 +1222,16 @@ def pytest(
         console.print(f"[red]❌ No metadata found for project {project_name}[/red]")
         raise typer.Exit(1) from None
 
-    # Build pytest command - use venv's pytest
-    venv_python = metadata.path / ".venv" / "bin" / "python"
-    pytest_cmd = [str(venv_python), "-m", "pytest"]
-
-    # Add target if specified
-    if target:
-        pytest_cmd.append(target)
-
-    # Add pytest options
-    if verbose:
-        pytest_cmd.append("-v")
-
-    if coverage:
-        pytest_cmd.extend(["--cov=superset", "--cov-report=term-missing"])
-
-    if markers:
-        pytest_cmd.extend(["-m", markers])
-
-    if maxfail:
-        pytest_cmd.extend(["--maxfail", str(maxfail)])
-
-    if pdb:
-        pytest_cmd.append("--pdb")
+    # Build docker-compose command
+    docker_cmd = [
+        "docker-compose",
+        "-p",
+        metadata.name,
+        "-f",
+        "docker-compose-light.yml",
+        "run",
+        "--rm",
+    ]
 
     # Set environment variables
     env = {
@@ -1250,17 +1240,44 @@ def pytest(
         "PROJECT": metadata.name,
     }
 
-    console.print(f"[blue]🐍 Running pytest for project: {metadata.name}[/blue]")
-    if target:
-        console.print(f"[dim]Target: {target}[/dim]")
+    # Add nuke flag if requested
+    if nuke:
+        docker_cmd.extend(["-e", "FORCE_RELOAD=true"])
+        console.print("[yellow]💥 Nuking and recreating test database...[/yellow]")
 
-    run_cmd.run(
-        pytest_cmd,
-        cwd=metadata.path,
-        env=env,
-        description="Running pytest",
-        quiet=True,  # Don't show the command to avoid flashing
-    )
+    # Add pytest-runner service
+    docker_cmd.append("pytest-runner")
+
+    # Get extra arguments from context (all arguments not parsed by Typer)
+    extra_args = ctx.params.get("args", []) or []
+    if hasattr(ctx, "args"):
+        extra_args.extend(ctx.args)
+
+    # Build pytest command - now we just pass all args directly
+    pytest_cmd = ["pytest"]
+    if extra_args:
+        pytest_cmd.extend(extra_args)
+
+    # Combine docker and pytest commands
+    full_cmd = docker_cmd + pytest_cmd
+
+    console.print(f"[blue]🐍 Running pytest for project: {metadata.name}[/blue]")
+    if extra_args and len(extra_args) > 0:
+        console.print(f"[dim]Arguments: {' '.join(extra_args)}[/dim]")
+    if nuke:
+        console.print("[dim]Test database will be recreated[/dim]")
+
+    try:
+        run_cmd.run(
+            full_cmd,
+            cwd=metadata.path,
+            env=env,
+            description="Running pytest in Docker",
+            quiet=False,  # Show output so we can see pytest results
+        )
+    except subprocess.CalledProcessError as e:
+        console.print(f"\n[red]❌ Tests failed with exit code {e.returncode}[/red]")
+        raise typer.Exit(e.returncode) from e
 
 
 def _is_docker_running(project_name: str) -> bool:
