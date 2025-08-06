@@ -81,8 +81,8 @@ clo add my-feature
 # Or specify a port
 clo add my-feature 9007
 
-# Activate the project environment
-clo activate my-feature
+# Drop into Docker container for development
+clo shell my-feature
 
 # Start Docker containers
 clo docker up
@@ -120,11 +120,11 @@ Creates a new worktree project with:
 - Auto-assigns port if not specified
 
 ### `claudette activate <project>` / `claudette shell [project]`
-Starts a new shell with:
-- Python venv activated
-- NODE_PORT and PROJECT environment variables set
-- Project directory as working directory
-- Modified prompt showing active project
+- `activate`: Starts a new shell with Python venv activated and project environment
+- `shell`: Drops you into the main Superset Docker container for hands-on development
+  - Auto-starts containers if not running
+  - Full access to running Superset application
+  - Direct access to database, Redis, and all services
 
 ### `claudette list`
 Shows all projects with their ports and Docker status:
@@ -204,7 +204,9 @@ Completely removes claudette and all projects:
 
 3. **Activate the project**:
    ```bash
-   claudette activate new-feature
+   clo shell new-feature        # Drop into Docker container (recommended)
+   # OR
+   clo activate new-feature     # Activate Python venv in local shell
    ```
 
 4. **Start services**:
@@ -231,9 +233,9 @@ Completely removes claudette and all projects:
 
 8. **Clean up**:
    ```bash
-   claudette docker down
-   exit  # Leave the shell (or Ctrl+D)
-   claudette remove new-feature
+   exit                    # Leave Docker container (or Ctrl+D)
+   clo docker down         # Stop containers
+   clo remove new-feature  # Remove project
    ```
 
 ## Why Claudette?
@@ -316,9 +318,11 @@ clo pytest -k test_charts               # Run tests matching pattern
 clo pytest --maxfail=3 tests/           # Stop after 3 failures
 
 # Frontend tests
-clo jest
-clo jest --watch
-clo jest components/Button
+clo jest                                         # Run all tests
+clo jest --watch                                 # Watch mode
+clo jest --coverage                              # Coverage report
+clo jest src/components/Button                   # Test specific directory
+clo jest superset-frontend/src/components/Button # Auto-strips prefix
 ```
 
 ### Refreshing Database

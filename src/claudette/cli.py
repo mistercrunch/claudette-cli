@@ -654,7 +654,7 @@ def deactivate() -> None:
 def shell(
     project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
 ) -> None:
-    """🐚 Start shell in project context (alias for activate, but can auto-detect current project)."""
+    """🐚 Drop into the main Superset Docker container for hands-on development."""
     if not project:
         # Try to detect current project
         cwd = Path.cwd()
@@ -679,63 +679,59 @@ def shell(
         console.print(f"[red]No metadata found for project {project}[/red]")
         raise typer.Exit(1) from None
 
-    console.print(f"[green]🚀 Activating project: {project}[/green]")
-    console.print("[dim]Setting up project environment...[/dim]")
+    console.print(f"[green]🚀 Connecting to Superset container for project: {project}[/green]")
+    console.print("[dim]Dropping you into the main Superset container...[/dim]")
 
-    # Create activation script (only modify PS1 if it exists and we're in bash/zsh)
-    activate_script = f"""
-# Source user's bashrc first
-source ~/.bashrc 2>/dev/null || true
+    # Check if containers are running
+    if not _is_docker_running(metadata.name):
+        console.print("[yellow]⚠️  Docker containers not running[/yellow]")
+        console.print("[dim]Starting containers first...[/dim]")
 
-# Set environment variables
-export NODE_PORT={metadata.port}
-export PROJECT={metadata.name}
+        # Start containers
+        start_cmd = [
+            "docker-compose",
+            "-p",
+            metadata.name,
+            "-f",
+            "docker-compose-light.yml",
+            "up",
+            "-d",
+        ]
+        env = {**os.environ, "NODE_PORT": str(metadata.port)}
 
-# Navigate to project directory
-cd {project_path}
+        try:
+            run_cmd.run(
+                start_cmd, cwd=project_path, env=env, description="Starting Docker containers"
+            )
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]❌ Failed to start containers: {e.returncode}[/red]")
+            raise typer.Exit(e.returncode) from e
 
-# Activate Python virtual environment
-source .venv/bin/activate
+    # Execute bash in the main superset-light container
+    exec_cmd = [
+        "docker-compose",
+        "-p",
+        metadata.name,
+        "-f",
+        "docker-compose-light.yml",
+        "exec",
+        "superset-light",
+        "/bin/bash",
+    ]
 
-# Only modify prompt if PS1 exists and we're in a compatible shell
-if [ -n "$PS1" ] && ([ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]); then
-    PS1="({metadata.name}) $PS1"
-fi
+    env = {**os.environ, "NODE_PORT": str(metadata.port)}
 
-# Show activation status (using ANSI green for 'activated')
-echo
-echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
-echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m - You are now in a project shell"
-echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
-echo
-echo "✓ Directory: $(pwd)"
-echo -e "✓ Virtual environment: \\033[32mactivated\\033[0m"
-echo "✓ PROJECT=$PROJECT"
-echo "✓ NODE_PORT=$NODE_PORT"
-echo
-echo "💡 This is a nested shell session. Press Ctrl+D to exit and return to your original shell."
-echo -e "\\033[90mPython: $(which python)\\033[0m"
-echo
-
-"""
-
-    # Write activation script to a temporary file
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
-        f.write(activate_script)
-        temp_script = f.name
+    console.print("[dim]Use 'exit' or Ctrl+D to leave the container[/dim]")
 
     try:
-        # Start bash in the project directory with our activation script
         subprocess.run(
-            ["bash", "--rcfile", temp_script],
-            cwd=project_path,  # Start in project directory
-            check=False,
+            exec_cmd,
+            cwd=project_path,
+            env=env,
+            check=False,  # Don't raise on non-zero exit (normal when user exits)
         )
-    finally:
-        # Clean up temp file
-        Path(temp_script).unlink(missing_ok=True)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Exited container shell[/dim]")
 
 
 @app.command()
@@ -1124,22 +1120,23 @@ def status(
     console.print()
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jest(
     ctx: typer.Context,  # noqa: ARG001
-    args: List[str] = typer.Argument(None, help="Arguments to pass to Jest"),
 ) -> None:
     """🧪 Run Jest unit tests for frontend code.
 
-    All arguments are passed through to Jest via 'npm run test -- [args]'.
+    All arguments are passed directly to Jest. Paths starting with 'superset-frontend/'
+    are automatically adjusted since Jest runs from that directory.
 
     Examples:
-        claudette jest                          # Run all tests
-        claudette jest components/Button        # Run tests for Button component
-        claudette jest Button.test.tsx         # Run specific test file
-        claudette jest --watch                  # Run in watch mode
-        claudette jest --coverage               # Generate coverage report
-        claudette jest --testPathPattern=Button # Pattern matching
+        clo jest                                         # Run all tests
+        clo jest src/components/Button                   # Run tests in Button directory
+        clo jest Button.test.tsx                         # Run specific test file
+        clo jest --watch                                 # Run in watch mode
+        clo jest --coverage                              # Generate coverage report
+        clo jest --testPathPattern=Button                # Pattern matching
+        clo jest superset-frontend/src/components/Button # Auto-strips superset-frontend/
     """
     # Get current project
     cwd = Path.cwd()
@@ -1155,8 +1152,24 @@ def jest(
         console.print(f"[red]❌ No metadata found for project {project_name}[/red]")
         raise typer.Exit(1) from None
 
-    # Build Jest command - pass all args through
-    jest_cmd = ["npm", "run", "test", "--"] + (args or [])
+    # Get extra arguments from context (all arguments not parsed by Typer)
+    extra_args = ctx.params.get("args", []) or []
+    if hasattr(ctx, "args"):
+        extra_args.extend(ctx.args)
+
+    # Process arguments to handle superset-frontend/ prefix
+    processed_args = []
+    for arg in extra_args:
+        if arg.startswith("superset-frontend/"):
+            # Strip the prefix since we're already running from that directory
+            cleaned_arg = arg[len("superset-frontend/") :]
+            processed_args.append(cleaned_arg)
+            console.print(f"[dim]Adjusted path: {arg} → {cleaned_arg}[/dim]")
+        else:
+            processed_args.append(arg)
+
+    # Build Jest command - pass all processed args through
+    jest_cmd = ["npm", "run", "test", "--"] + processed_args
 
     # Set environment variables
     env = {
@@ -1173,14 +1186,20 @@ def jest(
         raise typer.Exit(1)
 
     console.print(f"[blue]🧪 Running Jest tests for project: {metadata.name}[/blue]")
+    if processed_args:
+        console.print(f"[dim]Arguments: {' '.join(processed_args)}[/dim]")
 
-    run_cmd.run(
-        jest_cmd,
-        cwd=frontend_dir,
-        env=env,
-        description="Running Jest tests",
-        quiet=True,  # Don't show the command to avoid flashing
-    )
+    try:
+        run_cmd.run(
+            jest_cmd,
+            cwd=frontend_dir,
+            env=env,
+            description="Running Jest tests",
+            quiet=False,  # Show output so we can see test results!
+        )
+    except subprocess.CalledProcessError as e:
+        console.print(f"\n[red]❌ Tests failed with exit code {e.returncode}[/red]")
+        raise typer.Exit(e.returncode) from e
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
