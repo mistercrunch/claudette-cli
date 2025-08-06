@@ -35,7 +35,8 @@ clo --help
 - 🎨 **Beautiful CLI** - Powered by Typer and Rich for a great experience
 - 🔧 **Claude Code Integration** - Automatic environment setup for AI assistance
 - ⚡ **Fast Setup** - Uses `uv` for blazing fast Python package installation
-- 📝 **Shared CLAUDE.local.md** - Single source of truth for Claude instructions across all projects
+- 📝 **PROJECT.md Standard** - Persistent branch docs in `~/.claudette/projects/`, symlinked to worktrees
+- 🔗 **Shared CLAUDE.local.md** - Single source of truth for Claude instructions across all projects
 - 🎯 **Auto Port Assignment** - Automatically finds available ports when not specified
 
 ## Installation
@@ -173,6 +174,12 @@ Cleanly removes a project:
 - Removes git worktree
 - Cleans up all project files
 
+### `claudette sync [project]`
+Syncs PROJECT.md content with claudette metadata:
+- Updates project description from PROJECT.md
+- Refreshes what shows in `claudette list`
+- Run after editing PROJECT.md
+
 ### `claudette nuke` (DANGEROUS!)
 Completely removes claudette and all projects:
 - Stops ALL Docker containers
@@ -186,9 +193,37 @@ Completely removes claudette and all projects:
 - `CLAUDETTE_WORKTREE_BASE` - Base directory for worktrees (default: `~/code/superset-worktree`)
 - `CLAUDETTE_PYTHON_VERSION` - Python version to use (default: `python3.11`)
 
-### Files
-- `CLAUDE.local.md` - Symlinked to all projects for consistent Claude instructions
-- `.claude_rc_template` - Template for project-specific Claude configuration
+### Files & Directories
+
+#### Project Folder Structure
+Each project gets a dedicated folder in `~/.claudette/projects/{project}/` containing:
+- `.claudette` - Project metadata (port, path, description)
+- `PROJECT.md` - Branch-specific documentation (symlinked to worktree)
+- `.env.local` - Local environment variables (symlinked to worktree, future)
+
+#### File Hierarchy
+- `CLAUDE.md` - Repo-wide Superset development guidelines (in Superset repo)
+- `CLAUDE.local.md` - Shared claudette configuration (symlinked to all worktrees)
+- `PROJECT.md` - Branch-specific docs (lives in project folder, symlinked to worktree)
+- `.claude_rc` - Central configuration referencing the PROJECT.md standard
+
+### PROJECT.md Standard
+
+Claudette uses PROJECT.md for branch-specific documentation:
+- Lives in `~/.claudette/projects/{project}/PROJECT.md`
+- Symlinked into worktree for easy editing
+- Edit in your worktree → changes persist in project folder
+- Survives worktree removal/recreation
+- Use `--keep-docs` with `claudette remove` to preserve for later
+- Claude loads PROJECT.md when present for branch context
+
+### Extensible Architecture
+
+The project folder structure is designed to be extensible. Files are managed via constants in the code, making it easy to add more symlinked files in the future (scripts, configs, etc.).
+
+### Automatic Migration
+
+Claudette automatically migrates older installations to the latest structure. A version file (`~/.claudette/.claudette.json`) tracks the schema version and ensures smooth upgrades without user intervention.
 
 ## Development Workflow
 

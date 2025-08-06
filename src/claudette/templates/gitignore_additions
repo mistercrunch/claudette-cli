@@ -1,0 +1,4 @@
+# Claudette project-specific files (not committed)
+PROJECT.md
+.env.local
+.claudette

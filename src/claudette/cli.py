@@ -1,8 +1,10 @@
 """Main CLI module for claudette."""
 
 import contextlib
+import json
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -12,7 +14,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from .config import ClaudetteSettings, ProjectMetadata
+from .config import PROJECT_MANAGED_FILES, ClaudetteSettings, ProjectMetadata
 
 
 def get_template_path(template_name: str) -> Path:
@@ -92,6 +94,124 @@ settings = ClaudetteSettings()
 # Global command runner instance
 run_cmd = CommandRunner(console)
 
+# Current claudette schema version
+CLAUDETTE_VERSION = "0.2.0"
+
+
+def _write_version_file(version_file: Path, version: str) -> None:
+    """Write version file with current version and timestamp."""
+    version_data = {
+        "version": version,
+        "last_updated": datetime.now().isoformat(),
+    }
+    version_file.write_text(json.dumps(version_data, indent=2))
+
+
+def _migrate_v01_to_v02() -> None:
+    """Migrate from old *.claudette files to new folder structure.
+
+    Moves ~/.claudette/projects/*.claudette to ~/.claudette/projects/{project}/.claudette
+    and creates PROJECT.md files with symlinks.
+    """
+    projects_dir = settings.claudette_home / "projects"
+    if not projects_dir.exists():
+        return
+
+    # Use list() builtin explicitly to avoid conflict with list command
+    old_files = [f for f in projects_dir.glob("*.claudette")]
+    if not old_files:
+        return  # Already migrated or no projects
+
+    # Perform silent migration
+    for old_file in old_files:
+        project_name = old_file.stem
+        new_folder = projects_dir / project_name
+        new_folder.mkdir(exist_ok=True)
+
+        # Move metadata file
+        new_file = new_folder / ".claudette"
+        if not new_file.exists():
+            old_file.rename(new_file)
+
+        # Create PROJECT.md if it doesn't exist
+        project_md_path = new_folder / "PROJECT.md"
+        if not project_md_path.exists():
+            project_md_content = f"""# {project_name}
+
+Project documentation for {project_name}.
+
+## Overview
+<!-- Add description of this feature/branch -->
+
+## Goals
+<!-- What are you trying to accomplish? -->
+
+## Implementation Notes
+<!-- Technical details, approach, key files -->
+
+## Testing Strategy
+<!-- How will you test this feature? -->
+
+## Current Status
+<!-- What's done, what's in progress, what's blocked -->
+
+## Notes
+<!-- Any other context or documentation -->
+"""
+            project_md_path.write_text(project_md_content)
+
+        # Create symlink in worktree if the worktree exists
+        worktree_path = settings.worktree_base / project_name
+        if worktree_path.exists():
+            worktree_project_md = worktree_path / "PROJECT.md"
+            if not worktree_project_md.exists():
+                with contextlib.suppress(OSError, FileExistsError):
+                    worktree_project_md.symlink_to(project_md_path)
+
+            # Also create .env.local while we're at it
+            env_local_path = new_folder / ".env.local"
+            if not env_local_path.exists():
+                env_local_path.write_text(f"# Local environment variables for {project_name}\n")
+
+            worktree_env_local = worktree_path / ".env.local"
+            if not worktree_env_local.exists():
+                with contextlib.suppress(OSError, FileExistsError):
+                    worktree_env_local.symlink_to(env_local_path)
+
+
+def _ensure_claudette_initialized() -> None:
+    """Ensure claudette is properly initialized and migrated to latest version.
+
+    This runs on every command to ensure users are always on the latest structure.
+    """
+    # Skip if claudette home doesn't exist yet
+    if not settings.claudette_home.exists():
+        return
+
+    version_file = settings.claudette_home / ".claudette.json"
+
+    if not version_file.exists():
+        # Pre-0.2.0 installation detected - migrate silently
+        _migrate_v01_to_v02()
+        _write_version_file(version_file, CLAUDETTE_VERSION)
+    else:
+        # Check if we need to run any migrations
+        try:
+            version_data = json.loads(version_file.read_text())
+            stored_version = version_data.get("version", "0.1.0")
+
+            # Simple version comparison (works for x.y.z format)
+            if stored_version < CLAUDETTE_VERSION:
+                # Run migrations based on version
+                if stored_version < "0.2.0":
+                    _migrate_v01_to_v02()
+
+                # Update version file after successful migration
+                _write_version_file(version_file, CLAUDETTE_VERSION)
+        except (json.JSONDecodeError, KeyError):
+            # Invalid version file, recreate it
+            _write_version_file(version_file, CLAUDETTE_VERSION)
+
 
 @app.command()
 def init(
@@ -154,6 +274,17 @@ def init(
 
         # Copy central .claude_rc
         shutil.copy(get_template_path("claude_rc_central"), settings.claudette_home / ".claude_rc")
+
+        # Add claudette entries to Superset's .gitignore
+        progress.update(task, description="Updating Superset .gitignore...")
+        gitignore_path = settings.superset_base / ".gitignore"
+        gitignore_additions = get_template_path("gitignore_additions").read_text()
+
+        if gitignore_path.exists():
+            existing_content = gitignore_path.read_text()
+            if "PROJECT.md" not in existing_content:
+                with gitignore_path.open("a") as f:
+                    f.write("\n" + gitignore_additions + "\n")
 
     # Success message
     console.print("\n[bold green]✅ Claudette initialized successfully![/bold green]\n")
@@ -313,6 +444,8 @@ def add(
 
         # Step 2: Save metadata
         progress.update(task, description="Saving project metadata...")
+        # Try to extract description from PROJECT.md if it exists (for reused branches)
+        metadata.update_from_project_md()
         metadata.save(settings.claudette_home)
 
         # Step 3: Create Python venv
@@ -360,7 +493,53 @@ def add(
         if settings.claude_local_md:
             (project_path / "CLAUDE.local.md").symlink_to(settings.claude_local_md)
 
-        # Step 6: Create .claude_rc from template
+        # Step 6: Create project folder and managed files
+        progress.update(task, description="Creating project folder and files...")
+        project_folder = metadata.project_folder(settings.claudette_home)
+        project_folder.mkdir(parents=True, exist_ok=True)
+
+        # Create and symlink managed files
+        for filename in PROJECT_MANAGED_FILES:
+            source_path = project_folder / filename
+            worktree_path = project_path / filename
+
+            # Create file in project folder if it doesn't exist
+            if filename == "PROJECT.md" and not source_path.exists():
+                project_md_content = f"""# {project}
+
+Branch-specific documentation for the {final_branch_name} feature branch.
+
+## Overview
+<!-- One-paragraph description of what this branch/feature is about -->
+
+## Goals
+<!-- What are you trying to accomplish? -->
+
+## Implementation Notes
+<!-- Technical details, approach, key files -->
+
+## Testing Strategy
+<!-- How will you test this feature? -->
+
+## Current Status
+<!-- What's done, what's in progress, what's blocked -->
+
+## Related PRs/Issues
+<!-- Links to GitHub issues, PRs, discussions -->
+
+## Notes
+<!-- Any other context, reminders, or documentation -->
+"""
+                source_path.write_text(project_md_content)
+            elif filename == ".env.local" and not source_path.exists():
+                # Create empty .env.local for future use
+                source_path.write_text(f"# Local environment variables for {project}\n")
+
+            # Create symlink in worktree if it doesn't exist
+            if not worktree_path.exists() and source_path.exists():
+                worktree_path.symlink_to(source_path)
+
+        # Step 7: Create .claude_rc from template
         if settings.claude_rc_template and settings.claude_rc_template.exists():
             # Use template and replace placeholders
             template_content = settings.claude_rc_template.read_text()
@@ -412,7 +591,7 @@ cd superset-frontend && npm test
 """
         (project_path / ".claude_rc").write_text(claude_rc_content)
 
-        # Step 7: Install frontend dependencies
+        # Step 8: Install frontend dependencies
         progress.update(task, description="Installing frontend dependencies...")
         run_cmd.run(
             ["npm", "install"],
@@ -420,7 +599,7 @@ cd superset-frontend && npm test
             description="Installing frontend dependencies",
         )
 
-        # Step 8: Setup pre-commit
+        # Step 9: Setup pre-commit
         progress.update(task, description="Setting up pre-commit hooks...")
         venv_python = project_path / ".venv" / "bin" / "python"
         run_cmd.run(
@@ -458,8 +637,13 @@ cd superset-frontend && npm test
 def remove(
     project: str = typer.Argument(..., help="Project name to remove"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+    keep_docs: bool = typer.Option(False, "--keep-docs", help="Keep PROJECT.md and project folder"),
 ) -> None:
-    """🗑️  Remove a worktree project and clean up resources."""
+    """🗑️  Remove a worktree project and clean up resources.
+
+    By default, removes everything including PROJECT.md documentation.
+    Use --keep-docs to preserve PROJECT.md for future use.
+    """
     project_path = settings.worktree_base / project
 
     if not project_path.exists():
@@ -507,6 +691,24 @@ def remove(
             description="Removing git worktree",
         )
 
+    # Handle project folder
+    if metadata:
+        project_folder = metadata.project_folder(settings.claudette_home)
+        if not keep_docs and project_folder.exists():
+            import shutil
+
+            shutil.rmtree(project_folder)
+            console.print("[dim]Removed project folder and documentation[/dim]")
+        elif keep_docs and project_folder.exists():
+            console.print("[yellow]Kept project folder with PROJECT.md and settings[/yellow]")
+            console.print(f"[dim]Location: {project_folder}[/dim]")
+
+    # Also clean up old-style metadata file if it exists
+    old_metadata_file = settings.claudette_home / "projects" / f"{project}.claudette"
+    if old_metadata_file.exists():
+        old_metadata_file.unlink()
+        console.print("[dim]Cleaned up old metadata file[/dim]")
+
     console.print(f"[green]✓ Project '{project}' removed successfully[/green]")
 
 
@@ -518,14 +720,15 @@ def list() -> None:
     )
     table.add_column("Project", style="cyan", no_wrap=True)
     table.add_column("Port", justify="right", style="green")
-    table.add_column("Path", style="dim")
+    table.add_column("Description", style="yellow", max_width=40)
     table.add_column("Status", justify="center")
 
     # Find all projects with metadata files
     projects_found = False
-    metadata_dir = settings.claudette_home / "projects"
-    if metadata_dir.exists():
-        for metadata_file in metadata_dir.glob("*.claudette"):
+    projects_dir = settings.claudette_home / "projects"
+    if projects_dir.exists():
+        # Check old-style metadata files
+        for metadata_file in projects_dir.glob("*.claudette"):
             projects_found = True
             project_name = metadata_file.stem
             try:
@@ -534,19 +737,60 @@ def list() -> None:
                 # Check if docker is running
                 docker_status = "🟢" if _is_docker_running(metadata.name) else "⚫"
 
+                # Try to update description from PROJECT.md
+                metadata.update_from_project_md()
+
+                # Truncate description for display
+                description = metadata.description or "[dim]No description[/dim]"
+                if len(description) > 40:
+                    description = description[:37] + "..."
+
                 table.add_row(
                     metadata.name,
                     str(metadata.port),
-                    str(metadata.path.relative_to(Path.home())),
+                    description,
                     docker_status,
                 )
             except Exception:
                 table.add_row(
                     project_name,
                     "?",
-                    "?",
+                    "[dim]Error loading[/dim]",
                     "⚠️",
                 )
+
+        # Check new-style project folders
+        for project_folder in projects_dir.iterdir():
+            if project_folder.is_dir() and (project_folder / ".claudette").exists():
+                projects_found = True
+                project_name = project_folder.name
+                try:
+                    metadata = ProjectMetadata.load(project_name, settings.claudette_home)
+
+                    # Check if docker is running
+                    docker_status = "🟢" if _is_docker_running(metadata.name) else "⚫"
+
+                    # Try to update description from PROJECT.md
+                    metadata.update_from_project_md()
+
+                    # Truncate description for display
+                    description = metadata.description or "[dim]No description[/dim]"
+                    if len(description) > 40:
+                        description = description[:37] + "..."
+
+                    table.add_row(
+                        metadata.name,
+                        str(metadata.port),
+                        description,
+                        docker_status,
+                    )
+                except Exception:
+                    table.add_row(
+                        project_name,
+                        "?",
+                        "[dim]Error loading[/dim]",
+                        "⚠️",
+                    )
 
     if projects_found:
         console.print(table)
@@ -1556,6 +1800,52 @@ def _handle_branch_conflict(
 
 
 @app.command()
+def sync(
+    project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
+) -> None:
+    """🔄 Sync PROJECT.md content with claudette metadata.
+
+    Updates the project metadata with the description from PROJECT.md.
+    Useful after editing PROJECT.md to update what shows in 'claudette list'.
+    """
+    # Determine project
+    if not project:
+        cwd = Path.cwd()
+        if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+            project = cwd.name
+        else:
+            console.print("[red]❌ Not in a claudette project directory[/red]")
+            console.print("[dim]Use: claudette sync <project-name>[/dim]")
+            raise typer.Exit(1)
+
+    project_path = settings.worktree_base / project
+    if not project_path.exists():
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    # Update from PROJECT.md
+    if metadata.update_from_project_md():
+        metadata.save(settings.claudette_home)
+        console.print(f"[green]✅ Updated metadata for {project}[/green]")
+        if metadata.description:
+            console.print(
+                f"[dim]Description: {metadata.description[:100]}...[/dim]"
+                if len(metadata.description) > 100
+                else f"[dim]Description: {metadata.description}[/dim]"
+            )
+    else:
+        console.print(f"[yellow]No PROJECT.md found for {project}[/yellow]")
+        console.print(f"[dim]Expected at: {project_path / 'PROJECT.md'}[/dim]")
+
+
+@app.command()
 def nuke() -> None:
     """🚨 COMPLETELY REMOVE claudette and all projects (DANGEROUS!)"""
     console.print("\n[bold red]🚨 NUCLEAR OPTION - COMPLETE CLAUDETTE REMOVAL 🚨[/bold red]\n")
@@ -1662,6 +1952,10 @@ def main(ctx: typer.Context) -> None:
     If no command is specified and you're in a project, launches Claude Code.
     Otherwise shows help.
     """
+    # Run initialization/migration check for ALL commands (except 'init' itself)
+    if ctx.invoked_subcommand != "init":
+        _ensure_claudette_initialized()
+
     if ctx.invoked_subcommand is None:
         # Check if we're already in an activated claudette environment
         if os.environ.get("PROJECT") and os.environ.get("NODE_PORT"):

@@ -1,1 +1,27 @@
 # Central Claude RC file for all your claudette environments
+
+## Claudette Project Documentation Standard
+
+### PROJECT.md (Claudette Standard)
+Each claudette worktree creates a PROJECT.md file that:
+- Contains branch-specific documentation and context
+- Is gitignored (not committed to the Superset repo)
+- Should be loaded by Claude when present in the current directory
+- Tracks the feature/branch work, not repo-wide concerns
+
+### File Hierarchy
+
+1. **CLAUDE.md** (Superset repo) - Repo-wide Superset development guidelines
+2. **CLAUDE.local.md** (symlinked) - Shared claudette configuration for all projects
+3. **PROJECT.md** (per worktree) - Branch-specific documentation and tasks
+4. **~/.claude/CLAUDE.md** - Global user preferences (managed by user)
+
+## Loading PROJECT.md
+
+When Claude starts in a claudette project directory, it should load PROJECT.md
+if present to get branch-specific context. This file contains:
+- Feature overview and goals
+- Implementation notes
+- Testing strategy
+- Current status
+- Related PRs/issues

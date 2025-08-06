@@ -1,10 +1,21 @@
 """Configuration management for claudette."""
 
 from pathlib import Path
-from typing import Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+
+# Project files that are managed by claudette and symlinked to worktrees
+PROJECT_MANAGED_FILES = [
+    "PROJECT.md",  # Branch-specific documentation
+    ".env.local",  # Local environment variables (future)
+]
+
+# Files that stay in the project folder only (not symlinked)
+PROJECT_METADATA_FILES = [
+    ".claudette",  # Project metadata
+]
 
 
 class ProjectMetadata(BaseModel):
@@ -13,11 +24,16 @@ class ProjectMetadata(BaseModel):
     name: str
     port: int = Field(ge=9000, le=9999)
     path: Path
+    description: Optional[str] = None  # From PROJECT.md summary
+
+    def project_folder(self, claudette_home: Path) -> Path:
+        """Path to the project's folder in ~/.claudette/projects/."""
+        return claudette_home / "projects" / self.name
 
     def metadata_file(self, claudette_home: Path) -> Path:
         """Path to the .claudette metadata file."""
-        # Store metadata outside the project directory to avoid committing to git
-        return claudette_home / "projects" / f"{self.name}.claudette"
+        # Now stored inside the project folder
+        return self.project_folder(claudette_home) / ".claudette"
 
     def save(self, claudette_home: Path) -> None:
         """Save metadata to .claudette file."""
@@ -29,14 +45,26 @@ PROJECT_NAME="{self.name}"
 NODE_PORT="{self.port}"
 PROJECT_PATH="{self.path}"
 """
+        if self.description:
+            # Escape quotes and newlines for shell format
+            escaped_desc = self.description.replace('"', '\\"').replace("\n", "\\n")
+            content += f'PROJECT_DESCRIPTION="{escaped_desc}"\n'
         metadata_file.write_text(content)
 
     @classmethod
     def load(cls, project_name: str, claudette_home: Path) -> "ProjectMetadata":
         """Load metadata from .claudette file."""
-        metadata_file = claudette_home / "projects" / f"{project_name}.claudette"
+        # Try new location first (in project folder)
+        project_folder = claudette_home / "projects" / project_name
+        metadata_file = project_folder / ".claudette"
+
+        # Fall back to old location for backward compatibility
         if not metadata_file.exists():
-            raise FileNotFoundError(f"No .claudette file found for project {project_name}")
+            old_metadata_file = claudette_home / "projects" / f"{project_name}.claudette"
+            if old_metadata_file.exists():
+                metadata_file = old_metadata_file
+            else:
+                raise FileNotFoundError(f"No .claudette file found for project {project_name}")
 
         # Parse the shell-style file
         metadata = {}
@@ -51,6 +79,7 @@ PROJECT_PATH="{self.path}"
             name=metadata["PROJECT_NAME"],
             port=int(metadata["NODE_PORT"]),
             path=Path(metadata["PROJECT_PATH"]),
+            description=metadata.get("PROJECT_DESCRIPTION"),
         )
 
     @classmethod
@@ -63,18 +92,85 @@ PROJECT_PATH="{self.path}"
     def get_used_ports(cls, claudette_home: Path) -> Set[int]:
         """Get all ports currently in use by existing projects."""
         used_ports = set()
-        metadata_dir = claudette_home / "projects"
-        if not metadata_dir.exists():
+        projects_dir = claudette_home / "projects"
+        if not projects_dir.exists():
             return used_ports
 
-        for metadata_file in metadata_dir.glob("*.claudette"):
+        # Check both old-style (*.claudette) and new-style (folders with .claudette)
+        # Old style
+        for metadata_file in projects_dir.glob("*.claudette"):
             project_name = metadata_file.stem
             try:
                 metadata = cls.load(project_name, claudette_home)
                 used_ports.add(metadata.port)
             except Exception:
                 pass  # Skip invalid metadata files
+
+        # New style
+        for project_folder in projects_dir.iterdir():
+            if project_folder.is_dir():
+                metadata_file = project_folder / ".claudette"
+                if metadata_file.exists():
+                    try:
+                        metadata = cls.load(project_folder.name, claudette_home)
+                        used_ports.add(metadata.port)
+                    except Exception:
+                        pass
+
         return used_ports
+
+    @classmethod
+    def get_managed_files(cls) -> List[Tuple[str, bool]]:
+        """Get list of managed files and whether they should be symlinked.
+
+        Returns:
+            List of (filename, should_symlink) tuples
+        """
+        files = []
+        # Add symlinked files
+        for filename in PROJECT_MANAGED_FILES:
+            files.append((filename, True))
+        # Add metadata files (not symlinked)
+        for filename in PROJECT_METADATA_FILES:
+            files.append((filename, False))
+        return files
+
+    def update_from_project_md(self) -> bool:
+        """Update metadata description from PROJECT.md if it exists.
+
+        Returns True if PROJECT.md was found and parsed.
+        Handles both direct files and symlinks.
+        """
+        project_md = self.path / "PROJECT.md"
+        # Check if file exists (works for both regular files and symlinks)
+        if not project_md.exists():
+            return False
+
+        content = project_md.read_text()
+        # Extract the first paragraph after the title as description
+        lines = content.split("\n")
+        description_lines = []
+        found_content = False
+
+        for line in lines:
+            # Skip the main title
+            if line.startswith("# "):
+                continue
+            # Skip empty lines at the beginning
+            if not found_content and not line.strip():
+                continue
+            # Stop at the next section header
+            if line.startswith("## "):
+                break
+            # Collect description lines
+            if line.strip():
+                found_content = True
+                description_lines.append(line.strip())
+
+        if description_lines:
+            self.description = " ".join(description_lines)
+            return True
+        return False
 
     @classmethod
     def suggest_port(cls, claudette_home: Path, start_port: int = 9001) -> int:
