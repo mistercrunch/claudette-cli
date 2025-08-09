@@ -139,7 +139,7 @@ PROJECT_PATH="{self.path}"
         """Update metadata description from PROJECT.md title if it exists.
 
         Returns True if PROJECT.md was found and parsed.
-        Uses the first line (title) as the description, removing the "# " prefix.
+        Uses the first non-empty line as the description, stripping any leading # symbols.
         """
         project_md = self.path / "PROJECT.md"
         # Check if file exists (works for both regular files and symlinks)
@@ -149,18 +149,18 @@ PROJECT_PATH="{self.path}"
         content = project_md.read_text()
         lines = content.split("\n")
 
-        # Find the first line that starts with "# " (the main title)
+        # Find the first non-empty line and use it as description
         for line in lines:
-            if line.startswith("# "):
-                # Remove the "# " prefix and use as description
-                self.description = line[2:].strip()
-                return True
+            stripped = line.strip()
+            if stripped:
+                # Remove any leading # symbols and spaces
+                while stripped and stripped[0] == "#":
+                    stripped = stripped[1:]
+                stripped = stripped.strip()
 
-        # If no title found, fall back to first non-empty line
-        for line in lines:
-            if line.strip():
-                self.description = line.strip()
-                return True
+                if stripped:  # Make sure we still have content after removing #
+                    self.description = stripped
+                    return True
 
         return False
 
