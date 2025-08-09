@@ -902,13 +902,20 @@ def remove(
 @app.command()
 def list() -> None:
     """📋 List all claudette projects."""
+    # Create a fresh console to ensure we get the current terminal width
+    list_console = Console()
+
     table = Table(
-        title="Claudette Projects", show_header=True, header_style="bold", title_style="bold"
+        title="Claudette Projects",
+        show_header=True,
+        header_style="bold",
+        title_style="bold",
+        expand=True,  # This makes the table use the full terminal width
     )
     table.add_column("Project", style="cyan", no_wrap=True)
-    table.add_column("Port", justify="right", style="green")
-    table.add_column("Description", style="yellow", max_width=40)
-    table.add_column("Status", justify="center")
+    table.add_column("Port", justify="right", style="green", width=6)
+    table.add_column("Description", style="yellow", overflow="fold", ratio=3)
+    table.add_column("Status", justify="center", width=8)
 
     # Find all projects with metadata files
     projects_found = False
@@ -927,10 +934,8 @@ def list() -> None:
                 # Try to update description from PROJECT.md
                 metadata.update_from_project_md()
 
-                # Truncate description for display
+                # Get description for display
                 description = metadata.description or "[dim]No description[/dim]"
-                if len(description) > 40:
-                    description = description[:37] + "..."
 
                 table.add_row(
                     metadata.name,
@@ -960,10 +965,8 @@ def list() -> None:
                     # Try to update description from PROJECT.md
                     metadata.update_from_project_md()
 
-                    # Truncate description for display
+                    # Get description for display
                     description = metadata.description or "[dim]No description[/dim]"
-                    if len(description) > 40:
-                        description = description[:37] + "..."
 
                     table.add_row(
                         metadata.name,
@@ -980,12 +983,12 @@ def list() -> None:
                     )
 
     if projects_found:
-        console.print(table)
-        console.print("\n[dim]Status: 🟢 Running | ⚫ Stopped | ⚠️ Error[/dim]")
+        list_console.print(table)
+        list_console.print("\n[dim]Status: 🟢 Running | ⚫ Stopped | ⚠️ Error[/dim]")
     else:
-        console.print("[yellow]No claudette projects found[/yellow]")
-        console.print(f"[dim]Projects are stored in: {settings.worktree_base}[/dim]")
-        console.print("[dim]Run 'claudette init' to set up your environment[/dim]")
+        list_console.print("[yellow]No claudette projects found[/yellow]")
+        list_console.print(f"[dim]Projects are stored in: {settings.worktree_base}[/dim]")
+        list_console.print("[dim]Run 'claudette init' to set up your environment[/dim]")
 
 
 @app.command()
