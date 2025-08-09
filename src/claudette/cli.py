@@ -395,8 +395,74 @@ def add(
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        # Step 1: Create git worktree
-        task = progress.add_task("Creating git worktree...", total=None)
+        # Step 1: Ensure main repo is up-to-date
+        task = progress.add_task("Updating main repository...", total=None)
+
+        # First, verify the main repo is in a healthy state
+        try:
+            # Check if repo has commits
+            head_check = run_cmd.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=settings.superset_base,
+                capture=True,
+                quiet=True,
+                check=False,
+            )
+
+            if head_check.returncode != 0:
+                console.print("[red]❌ Main repository is not in a valid state![/red]")
+                console.print(
+                    "[yellow]The repository may be corrupted or have no commits.[/yellow]"
+                )
+                console.print("\nTo fix this, run:")
+                console.print("[cyan]claudette init --force[/cyan]")
+                raise typer.Exit(1)
+
+            # Fetch latest changes from remote
+            run_cmd.run(
+                ["git", "fetch", "origin"],
+                cwd=settings.superset_base,
+                description="Fetching latest changes from remote",
+            )
+
+            # Check current branch
+            current_branch_result = run_cmd.run(
+                ["git", "branch", "--show-current"],
+                cwd=settings.superset_base,
+                capture=True,
+                quiet=True,
+            )
+            current_branch = current_branch_result.stdout.strip()
+
+            # If on master, pull latest changes
+            if current_branch == "master":
+                run_cmd.run(
+                    ["git", "pull", "origin", "master", "--ff-only"],
+                    cwd=settings.superset_base,
+                    description="Pulling latest master branch",
+                )
+            elif not current_branch:
+                # Empty branch name might indicate a problem
+                console.print(
+                    "[yellow]⚠️  Main repo has no current branch, checking out master...[/yellow]"
+                )
+                run_cmd.run(
+                    ["git", "checkout", "-b", "master", "origin/master"],
+                    cwd=settings.superset_base,
+                    description="Creating master branch from origin",
+                )
+            else:
+                console.print(f"[dim]Main repo is on branch '{current_branch}', not pulling[/dim]")
+        except subprocess.CalledProcessError as e:
+            console.print("[red]❌ Could not update main repository![/red]")
+            console.print(f"[yellow]Error: {e.stderr if hasattr(e, 'stderr') else str(e)}[/yellow]")
+            console.print("\n[yellow]The main repository may be corrupted. To fix:[/yellow]")
+            console.print("1. Back up any uncommitted work in worktrees")
+            console.print("2. Run: [cyan]claudette init --force[/cyan]")
+            raise typer.Exit(1) from None
+
+        # Step 2: Create git worktree
+        progress.update(task, description="Creating git worktree...")
         try:
             if create_new_branch:
                 # Create new branch
@@ -442,13 +508,13 @@ def add(
             console.print(f"[red]Error creating worktree: {e.stderr}[/red]")
             raise typer.Exit(1) from e
 
-        # Step 2: Save metadata
+        # Step 3: Save metadata
         progress.update(task, description="Saving project metadata...")
         # Try to extract description from PROJECT.md if it exists (for reused branches)
         metadata.update_from_project_md()
         metadata.save(settings.claudette_home)
 
-        # Step 3: Create Python venv
+        # Step 4: Create Python venv
         progress.update(task, description="Creating Python virtual environment...")
         run_cmd.run(
             ["uv", "venv", "-p", settings.python_version],
@@ -456,7 +522,7 @@ def add(
             description="Creating Python virtual environment",
         )
 
-        # Step 4: Install Python dependencies
+        # Step 5: Install Python dependencies
         progress.update(
             task, description="Installing Python dependencies (this may take a while)..."
         )
@@ -488,12 +554,12 @@ def add(
             description="Installing Superset in editable mode",
         )
 
-        # Step 5: Symlink CLAUDE.local.md if exists
+        # Step 6: Symlink CLAUDE.local.md if exists
         progress.update(task, description="Setting up Claude configuration...")
         if settings.claude_local_md:
             (project_path / "CLAUDE.local.md").symlink_to(settings.claude_local_md)
 
-        # Step 6: Create project folder and managed files
+        # Step 7: Create project folder and managed files
         progress.update(task, description="Creating project folder and files...")
         project_folder = metadata.project_folder(settings.claudette_home)
         project_folder.mkdir(parents=True, exist_ok=True)
@@ -539,7 +605,7 @@ Branch-specific documentation for the {final_branch_name} feature branch.
             if not worktree_path.exists() and source_path.exists():
                 worktree_path.symlink_to(source_path)
 
-        # Step 7: Create .claude_rc from template
+        # Step 8: Create .claude_rc from template
         if settings.claude_rc_template and settings.claude_rc_template.exists():
             # Use template and replace placeholders
             template_content = settings.claude_rc_template.read_text()
@@ -591,7 +657,7 @@ cd superset-frontend && npm test
 """
         (project_path / ".claude_rc").write_text(claude_rc_content)
 
-        # Step 8: Install frontend dependencies
+        # Step 9: Install frontend dependencies
         progress.update(task, description="Installing frontend dependencies...")
         run_cmd.run(
             ["npm", "install"],
@@ -599,7 +665,7 @@ cd superset-frontend && npm test
             description="Installing frontend dependencies",
         )
 
-        # Step 9: Setup pre-commit
+        # Step 10: Setup pre-commit
         progress.update(task, description="Setting up pre-commit hooks...")
         venv_python = project_path / ".venv" / "bin" / "python"
         run_cmd.run(
@@ -644,17 +710,37 @@ def remove(
     By default, removes everything including PROJECT.md documentation.
     Use --keep-docs to preserve PROJECT.md for future use.
     """
-    project_path = settings.worktree_base / project
-
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
-
-    # Load metadata to get port for docker cleanup
+    # First check if we have metadata for this project
     try:
         metadata = ProjectMetadata.load(project, settings.claudette_home)
+        project_path = metadata.path  # Use path from metadata
     except FileNotFoundError:
+        # No metadata, check if directory exists with project name
+        project_path = settings.worktree_base / project
         metadata = None
+
+        # If neither metadata nor directory exists, nothing to remove
+        if not project_path.exists():
+            # Check for variations (like rison-old, rison-backup, etc)
+            possible_paths = [p for p in settings.worktree_base.glob(f"{project}*")]
+            if possible_paths:
+                console.print("[yellow]Found related directories:[/yellow]")
+                for p in possible_paths:
+                    console.print(f"  • {p.name}")
+
+                if len(possible_paths) == 1:
+                    # If there's exactly one match, offer to remove it
+                    project_path = possible_paths[0]
+                    console.print(
+                        f"\n[yellow]Found '{project_path.name}' - treating as '{project}'[/yellow]"
+                    )
+                else:
+                    console.print(f"\n[yellow]Multiple matches found for '{project}'[/yellow]")
+                    console.print("[dim]You may need to manually clean up these directories.[/dim]")
+                    raise typer.Exit(1) from None
+            else:
+                console.print(f"[red]Project '{project}' not found[/red]")
+                raise typer.Exit(1) from None
 
     if not force:
         console.print(
@@ -665,51 +751,152 @@ def remove(
             console.print("[yellow]Cancelled[/yellow]")
             raise typer.Exit(0)
 
+    errors_occurred = []
+
     with console.status("[yellow]Removing project...[/yellow]") as status:
         # Stop docker containers if metadata available
-        if metadata:
+        if metadata and project_path.exists():
             status.update("Stopping Docker containers...")
-            run_cmd.run(
-                [
-                    "docker-compose",
-                    "-p",
-                    project,
-                    "-f",
-                    "docker-compose-light.yml",
-                    "down",
-                ],
-                cwd=project_path,
-                env={**os.environ, "NODE_PORT": str(metadata.port)},
-                description="Stopping Docker containers",
-            )
+            try:
+                run_cmd.run(
+                    [
+                        "docker-compose",
+                        "-p",
+                        project,
+                        "-f",
+                        "docker-compose-light.yml",
+                        "down",
+                        "--timeout",
+                        "10",  # Add timeout to prevent hanging
+                    ],
+                    cwd=project_path,
+                    env={**os.environ, "NODE_PORT": str(metadata.port)},
+                    description="Stopping Docker containers",
+                    check=False,  # Don't fail if docker isn't running
+                )
+            except Exception as e:
+                errors_occurred.append(f"Docker cleanup failed: {e}")
+                console.print(
+                    "[yellow]⚠️  Could not stop Docker containers (may not be running)[/yellow]"
+                )
 
         # Remove git worktree
         status.update("Removing git worktree...")
-        run_cmd.run(
-            ["git", "worktree", "remove", project, "--force"],
-            cwd=settings.superset_base,
-            description="Removing git worktree",
-        )
 
-    # Handle project folder
+        try:
+            # Check if worktree is registered with git
+            worktree_check = run_cmd.run(
+                ["git", "worktree", "list"],
+                cwd=settings.superset_base,
+                capture=True,
+                quiet=True,
+                check=False,
+            )
+
+            if str(project_path) in worktree_check.stdout:
+                # Worktree is registered, remove it properly
+                run_cmd.run(
+                    ["git", "worktree", "remove", str(project_path), "--force"],
+                    cwd=settings.superset_base,
+                    description="Removing git worktree",
+                    check=False,
+                )
+            else:
+                console.print("[dim]Worktree not registered with git[/dim]")
+        except Exception as e:
+            errors_occurred.append(f"Git worktree removal failed: {e}")
+            console.print("[yellow]⚠️  Could not remove git worktree registration[/yellow]")
+
+        # Remove the actual directory (bulldoze through even if it has permission issues)
+        if project_path.exists():
+            status.update("Removing project directory...")
+            console.print(f"[dim]Removing directory: {project_path}[/dim]")
+
+            import shutil
+            import subprocess
+
+            try:
+                # First try normal removal
+                shutil.rmtree(project_path)
+                console.print("[green]✓ Directory removed[/green]")
+            except PermissionError:
+                # If permission denied, try with sudo (will prompt for password)
+                console.print("[yellow]Permission denied, attempting forceful removal...[/yellow]")
+                try:
+                    # Use rm -rf which is more aggressive
+                    subprocess.run(["rm", "-rf", str(project_path)], check=True)
+                    console.print("[green]✓ Directory forcefully removed[/green]")
+                except Exception:
+                    errors_occurred.append(f"Could not remove directory {project_path}")
+                    console.print(
+                        "[red]❌ Could not remove directory (may need manual cleanup)[/red]"
+                    )
+                    console.print(f"[dim]Try: sudo rm -rf {project_path}[/dim]")
+            except Exception as e:
+                errors_occurred.append(f"Directory removal failed: {e}")
+                console.print(f"[red]❌ Failed to remove directory: {e}[/red]")
+
+    # Handle project folder and metadata (always try to clean up)
+    console.print("[dim]Cleaning up project metadata...[/dim]")
+
+    # Clean up project folder
     if metadata:
         project_folder = metadata.project_folder(settings.claudette_home)
         if not keep_docs and project_folder.exists():
-            import shutil
+            try:
+                import shutil
 
-            shutil.rmtree(project_folder)
-            console.print("[dim]Removed project folder and documentation[/dim]")
+                shutil.rmtree(project_folder)
+                console.print("[green]✓ Removed project folder and documentation[/green]")
+            except Exception as e:
+                errors_occurred.append(f"Could not remove project folder: {e}")
+                console.print(
+                    f"[yellow]⚠️  Could not remove project folder: {project_folder}[/yellow]"
+                )
         elif keep_docs and project_folder.exists():
             console.print("[yellow]Kept project folder with PROJECT.md and settings[/yellow]")
             console.print(f"[dim]Location: {project_folder}[/dim]")
+    else:
+        # No metadata, but try to clean up anyway
+        project_folder = settings.claudette_home / "projects" / project
+        if project_folder.exists() and not keep_docs:
+            try:
+                import shutil
+
+                shutil.rmtree(project_folder)
+                console.print("[green]✓ Removed orphaned project folder[/green]")
+            except Exception as e:
+                errors_occurred.append(f"Could not remove project folder: {e}")
 
     # Also clean up old-style metadata file if it exists
     old_metadata_file = settings.claudette_home / "projects" / f"{project}.claudette"
     if old_metadata_file.exists():
-        old_metadata_file.unlink()
-        console.print("[dim]Cleaned up old metadata file[/dim]")
+        try:
+            old_metadata_file.unlink()
+            console.print("[green]✓ Cleaned up old metadata file[/green]")
+        except Exception as e:
+            errors_occurred.append(f"Could not remove old metadata file: {e}")
 
-    console.print(f"[green]✓ Project '{project}' removed successfully[/green]")
+    # Clean up git references if needed
+    with contextlib.suppress(Exception):
+        # Prune any broken worktree references
+        run_cmd.run(
+            ["git", "worktree", "prune"],
+            cwd=settings.superset_base,
+            check=False,
+            quiet=True,
+        )
+
+    # Report results
+    if errors_occurred:
+        console.print(
+            f"\n[yellow]⚠️  Project '{project}' removed with {len(errors_occurred)} issues:[/yellow]"
+        )
+        for error in errors_occurred:
+            console.print(f"  • {error}")
+        console.print("\n[dim]Manual cleanup may be needed for remaining files.[/dim]")
+    else:
+        console.print(f"[green]✅ Project '{project}' removed successfully[/green]")
 
 
 @app.command()

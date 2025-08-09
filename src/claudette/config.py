@@ -136,10 +136,10 @@ PROJECT_PATH="{self.path}"
         return files
 
     def update_from_project_md(self) -> bool:
-        """Update metadata description from PROJECT.md if it exists.
+        """Update metadata description from PROJECT.md title if it exists.
 
         Returns True if PROJECT.md was found and parsed.
-        Handles both direct files and symlinks.
+        Uses the first line (title) as the description, removing the "# " prefix.
         """
         project_md = self.path / "PROJECT.md"
         # Check if file exists (works for both regular files and symlinks)
@@ -147,29 +147,21 @@ PROJECT_PATH="{self.path}"
             return False
 
         content = project_md.read_text()
-        # Extract the first paragraph after the title as description
         lines = content.split("\n")
-        description_lines = []
-        found_content = False
 
+        # Find the first line that starts with "# " (the main title)
         for line in lines:
-            # Skip the main title
             if line.startswith("# "):
-                continue
-            # Skip empty lines at the beginning
-            if not found_content and not line.strip():
-                continue
-            # Stop at the next section header
-            if line.startswith("## "):
-                break
-            # Collect description lines
-            if line.strip():
-                found_content = True
-                description_lines.append(line.strip())
+                # Remove the "# " prefix and use as description
+                self.description = line[2:].strip()
+                return True
 
-        if description_lines:
-            self.description = " ".join(description_lines)
-            return True
+        # If no title found, fall back to first non-empty line
+        for line in lines:
+            if line.strip():
+                self.description = line.strip()
+                return True
+
         return False
 
     @classmethod
