@@ -914,7 +914,7 @@ def list() -> None:
     )
     table.add_column("Project", style="cyan", no_wrap=True)
     table.add_column("Port", justify="right", style="green", width=6)
-    table.add_column("Description", style="yellow", overflow="fold", ratio=3)
+    table.add_column("Description", style="yellow", overflow="ellipsis", no_wrap=True, ratio=3)
     table.add_column("Status", justify="center", width=8)
 
     # Find all projects with metadata files
