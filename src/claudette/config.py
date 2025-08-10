@@ -25,6 +25,7 @@ class ProjectMetadata(BaseModel):
     port: int = Field(ge=9000, le=9999)
     path: Path
     description: Optional[str] = None  # From PROJECT.md summary
+    frozen: bool = False  # Whether project dependencies are removed to save space
 
     def project_folder(self, claudette_home: Path) -> Path:
         """Path to the project's folder in ~/.claudette/projects/."""
@@ -44,6 +45,7 @@ class ProjectMetadata(BaseModel):
 PROJECT_NAME="{self.name}"
 NODE_PORT="{self.port}"
 PROJECT_PATH="{self.path}"
+PROJECT_FROZEN="{str(self.frozen).lower()}"
 """
         if self.description:
             # Escape quotes and newlines for shell format
@@ -75,11 +77,16 @@ PROJECT_PATH="{self.path}"
                 value = value.strip().strip('"').strip("'")
                 metadata[key.strip()] = value
 
+        # Parse frozen state - handle as boolean
+        frozen_str = metadata.get("PROJECT_FROZEN", "false").lower()
+        frozen = frozen_str in ("true", "1", "yes", "on")
+
         return cls(
             name=metadata["PROJECT_NAME"],
             port=int(metadata["NODE_PORT"]),
             path=Path(metadata["PROJECT_PATH"]),
             description=metadata.get("PROJECT_DESCRIPTION"),
+            frozen=frozen,
         )
 
     @classmethod

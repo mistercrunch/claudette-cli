@@ -928,8 +928,11 @@ def list() -> None:
             try:
                 metadata = ProjectMetadata.load(project_name, settings.claudette_home)
 
-                # Check if docker is running
-                docker_status = "🟢" if _is_docker_running(metadata.name) else "⚫"
+                # Check status - frozen takes precedence over docker
+                if metadata.frozen:
+                    status = "🧊"
+                else:
+                    status = "🟢" if _is_docker_running(metadata.name) else "⚫"
 
                 # Try to update description from PROJECT.md
                 metadata.update_from_project_md()
@@ -941,7 +944,7 @@ def list() -> None:
                     metadata.name,
                     str(metadata.port),
                     description,
-                    docker_status,
+                    status,
                 )
             except Exception:
                 table.add_row(
@@ -959,8 +962,11 @@ def list() -> None:
                 try:
                     metadata = ProjectMetadata.load(project_name, settings.claudette_home)
 
-                    # Check if docker is running
-                    docker_status = "🟢" if _is_docker_running(metadata.name) else "⚫"
+                    # Check status - frozen takes precedence over docker
+                    if metadata.frozen:
+                        status = "🧊"
+                    else:
+                        status = "🟢" if _is_docker_running(metadata.name) else "⚫"
 
                     # Try to update description from PROJECT.md
                     metadata.update_from_project_md()
@@ -972,7 +978,7 @@ def list() -> None:
                         metadata.name,
                         str(metadata.port),
                         description,
-                        docker_status,
+                        status,
                     )
                 except Exception:
                     table.add_row(
@@ -984,7 +990,7 @@ def list() -> None:
 
     if projects_found:
         list_console.print(table)
-        list_console.print("\n[dim]Status: 🟢 Running | ⚫ Stopped | ⚠️ Error[/dim]")
+        list_console.print("\n[dim]Status: 🟢 Running | ⚫ Stopped | 🧊 Frozen | ⚠️ Error[/dim]")
     else:
         list_console.print("[yellow]No claudette projects found[/yellow]")
         list_console.print(f"[dim]Projects are stored in: {settings.worktree_base}[/dim]")
@@ -1016,6 +1022,10 @@ def activate(
     except FileNotFoundError:
         console.print(f"[red]No metadata found for project {project}[/red]")
         raise typer.Exit(1) from None
+
+    # Check if project is frozen - activation requires dependencies
+    if not _ensure_project_thawed(project, require_thaw=True):
+        raise typer.Exit(1)
 
     console.print(f"[green]🚀 Activating project: {project}[/green]")
     console.print("[dim]Setting up project environment...[/dim]")
@@ -1113,6 +1123,10 @@ def shell(
         console.print(f"[red]No metadata found for project {project}[/red]")
         raise typer.Exit(1) from None
 
+    # Check if project is frozen - shell needs Docker running
+    if not _ensure_project_thawed(project):
+        console.print("[yellow]⚠️  Shell access may be limited without dependencies[/yellow]")
+
     console.print(f"[green]🚀 Connecting to Superset container for project: {project}[/green]")
     console.print("[dim]Dropping you into the main Superset container...[/dim]")
 
@@ -1187,6 +1201,10 @@ def docker(
     except FileNotFoundError:
         console.print(f"[red]No metadata found for project {project_name}[/red]")
         raise typer.Exit(1) from None
+
+    # Check if project is frozen - Docker needs dependencies
+    if not _ensure_project_thawed(project_name):
+        console.print("[yellow]⚠️  Docker may not work properly without dependencies[/yellow]")
 
     # Run docker-compose
     env = {**os.environ, "NODE_PORT": str(metadata.port)}
@@ -1343,6 +1361,235 @@ def nuke_db(
 
 
 @app.command()
+def freeze(
+    project: str = typer.Argument(..., help="Project name to freeze"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+) -> None:
+    """🧊 Freeze a project to save disk space by removing node_modules and .venv.
+
+    This removes the project's dependencies but preserves all code and git history.
+    The project can be quickly restored with 'claudette thaw'.
+
+    Saves approximately 3GB per project.
+    """
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    project_path = metadata.path
+
+    if not project_path.exists():
+        console.print(f"[red]Project directory not found: {project_path}[/red]")
+        raise typer.Exit(1)
+
+    # Check if already frozen
+    if metadata.frozen:
+        console.print(f"[yellow]Project '{project}' is already frozen[/yellow]")
+        raise typer.Exit(0)
+
+    # Check if Docker is running
+    if _is_docker_running(project):
+        console.print(f"[red]Cannot freeze project '{project}' while Docker is running[/red]")
+        console.print("[dim]Run 'claudette docker down' first[/dim]")
+        raise typer.Exit(1)
+
+    # Calculate space to be saved
+    node_modules_path = project_path / "node_modules"
+    superset_node_modules = project_path / "superset-frontend" / "node_modules"
+    venv_path = project_path / ".venv"
+
+    total_size = 0
+    paths_to_remove = []
+
+    if node_modules_path.exists():
+        size_mb = sum(f.stat().st_size for f in node_modules_path.rglob("*") if f.is_file()) / (
+            1024 * 1024
+        )
+        total_size += size_mb
+        paths_to_remove.append((node_modules_path, size_mb))
+
+    if superset_node_modules.exists():
+        size_mb = sum(f.stat().st_size for f in superset_node_modules.rglob("*") if f.is_file()) / (
+            1024 * 1024
+        )
+        total_size += size_mb
+        paths_to_remove.append((superset_node_modules, size_mb))
+
+    if venv_path.exists():
+        size_mb = sum(f.stat().st_size for f in venv_path.rglob("*") if f.is_file()) / (1024 * 1024)
+        total_size += size_mb
+        paths_to_remove.append((venv_path, size_mb))
+
+    if not paths_to_remove:
+        console.print(f"[yellow]No dependencies to freeze in project '{project}'[/yellow]")
+        # Still mark as frozen for consistency
+        metadata.frozen = True
+        metadata.save(settings.claudette_home)
+        raise typer.Exit(0)
+
+    # Show what will be removed
+    console.print(f"\n[cyan]Project: {project}[/cyan]")
+    console.print(f"[cyan]Space to be freed: {total_size:.1f} MB[/cyan]\n")
+    console.print("Will remove:")
+    for path, size_mb in paths_to_remove:
+        console.print(f"  • {path.name} ({size_mb:.1f} MB)")
+
+    if not force:
+        confirm = typer.confirm("\nProceed with freezing?")
+        if not confirm:
+            console.print("[yellow]Cancelled[/yellow]")
+            raise typer.Exit(0)
+
+    # Remove the directories
+    with console.status("[yellow]Freezing project...[/yellow]") as status:
+        import shutil
+
+        for path, _ in paths_to_remove:
+            status.update(f"Removing {path.name}...")
+            try:
+                shutil.rmtree(path)
+            except Exception as e:
+                console.print(f"[red]Error removing {path}: {e}[/red]")
+
+        # Update metadata
+        status.update("Updating metadata...")
+        metadata.frozen = True
+        metadata.save(settings.claudette_home)
+
+    console.print(f"[green]✅ Project '{project}' frozen successfully![/green]")
+    console.print(f"[green]Freed {total_size:.1f} MB of disk space[/green]")
+    console.print(f"\n[dim]To restore dependencies, run: claudette thaw {project}[/dim]")
+
+
+@app.command()
+def thaw(
+    project: str = typer.Argument(..., help="Project name to thaw"),
+) -> None:
+    """🔥 Thaw a frozen project by restoring its dependencies.
+
+    This restores node_modules and .venv for a frozen project.
+    Uses npm ci for fast, reproducible installs.
+    """
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    project_path = metadata.path
+
+    if not project_path.exists():
+        console.print(f"[red]Project directory not found: {project_path}[/red]")
+        raise typer.Exit(1)
+
+    # Check if already thawed
+    if not metadata.frozen:
+        console.print(f"[yellow]Project '{project}' is not frozen[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[cyan]Thawing project: {project}[/cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Restoring dependencies...", total=None)
+
+        # Restore Python virtual environment
+        progress.update(task, description="Creating Python virtual environment...")
+        venv_path = project_path / ".venv"
+        if not venv_path.exists():
+            try:
+                run_cmd.run(
+                    ["uv", "venv", ".venv"],
+                    cwd=project_path,
+                    description="Creating virtual environment",
+                )
+
+                # Install Python dependencies
+                progress.update(task, description="Installing Python dependencies...")
+                requirements_files = [
+                    project_path / "requirements.txt",
+                    project_path / "requirements" / "base.txt",
+                    project_path / "requirements" / "development.txt",
+                ]
+
+                for req_file in requirements_files:
+                    if req_file.exists():
+                        run_cmd.run(
+                            ["uv", "pip", "install", "-r", str(req_file)],
+                            cwd=project_path,
+                            env={**os.environ, "VIRTUAL_ENV": str(venv_path)},
+                            description=f"Installing from {req_file.name}",
+                        )
+
+                # Install editable package
+                if (project_path / "setup.py").exists():
+                    run_cmd.run(
+                        ["uv", "pip", "install", "-e", "."],
+                        cwd=project_path,
+                        env={**os.environ, "VIRTUAL_ENV": str(venv_path)},
+                        description="Installing package in editable mode",
+                    )
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to restore Python environment: {e}[/red]")
+                raise typer.Exit(1) from None
+
+        # Restore node_modules
+        node_modules_path = project_path / "node_modules"
+        superset_frontend = project_path / "superset-frontend"
+
+        if not node_modules_path.exists() and (project_path / "package.json").exists():
+            progress.update(task, description="Installing npm dependencies (root)...")
+            try:
+                # Use npm ci for faster, reproducible installs
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=project_path,
+                    description="Installing npm dependencies",
+                )
+            except subprocess.CalledProcessError:
+                # Fall back to npm install if ci fails (no package-lock.json)
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=project_path,
+                    description="Installing npm dependencies (fallback)",
+                )
+
+        if (
+            superset_frontend.exists()
+            and not (superset_frontend / "node_modules").exists()
+            and (superset_frontend / "package.json").exists()
+        ):
+            progress.update(task, description="Installing frontend dependencies...")
+            try:
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=superset_frontend,
+                    description="Installing frontend dependencies",
+                )
+            except subprocess.CalledProcessError:
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=superset_frontend,
+                    description="Installing frontend dependencies (fallback)",
+                )
+
+        # Update metadata
+        progress.update(task, description="Updating metadata...")
+        metadata.frozen = False
+        metadata.save(settings.claudette_home)
+
+    console.print(f"[green]✅ Project '{project}' thawed successfully![/green]")
+    console.print("[dim]Dependencies have been restored. You can now activate the project.[/dim]")
+
+
+@app.command()
 def open(
     project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
 ) -> None:
@@ -1452,6 +1699,12 @@ def status(
     table.add_row("Port", str(metadata.port))
     table.add_row("Frontend URL", f"http://localhost:{metadata.port}")
 
+    # Add frozen status
+    if metadata.frozen:
+        table.add_row("Status", "[cyan]🧊 Frozen[/cyan] (dependencies removed)")
+    else:
+        table.add_row("Status", "[green]Active[/green]")
+
     console.print(table)
     console.print()
 
@@ -1534,7 +1787,10 @@ def status(
 
     # Python venv
     venv_path = project_path / ".venv"
-    if venv_path.exists():
+    if metadata.frozen:
+        console.print("  Python venv: [cyan]🧊 Frozen[/cyan]")
+        console.print(f"    [dim]Run 'claudette thaw {project}' to restore[/dim]")
+    elif venv_path.exists():
         console.print("  Python venv: [green]✓ Installed[/green]")
         # Check if activated
         if os.environ.get("VIRTUAL_ENV") == str(venv_path):
@@ -1546,7 +1802,10 @@ def status(
 
     # Node modules
     node_modules = project_path / "superset-frontend" / "node_modules"
-    if node_modules.exists():
+    if metadata.frozen:
+        console.print("  Node modules: [cyan]🧊 Frozen[/cyan]")
+        console.print(f"    [dim]Run 'claudette thaw {project}' to restore[/dim]")
+    elif node_modules.exists():
         console.print("  Node modules: [green]✓ Installed[/green]")
     else:
         console.print("  Node modules: [red]✗ Missing[/red]")
@@ -1585,6 +1844,11 @@ def jest(
     except FileNotFoundError:
         console.print(f"[red]❌ No metadata found for project {project_name}[/red]")
         raise typer.Exit(1) from None
+
+    # Check if project is frozen - jest needs node_modules
+    if not _ensure_project_thawed(project_name):
+        console.print("[red]Cannot run tests without dependencies[/red]")
+        raise typer.Exit(1)
 
     # Get extra arguments from context (all arguments not parsed by Typer)
     extra_args = ctx.params.get("args", []) or []
@@ -1675,6 +1939,11 @@ def pytest(
         console.print(f"[red]❌ No metadata found for project {project_name}[/red]")
         raise typer.Exit(1) from None
 
+    # Check if project is frozen - pytest needs dependencies
+    if not _ensure_project_thawed(project_name):
+        console.print("[red]Cannot run tests without dependencies[/red]")
+        raise typer.Exit(1)
+
     # Build docker-compose command
     docker_cmd = [
         "docker-compose",
@@ -1745,6 +2014,156 @@ def _is_docker_running(project_name: str) -> bool:
         return bool(result.stdout.strip())
     except Exception:
         return False
+
+
+def _ensure_project_thawed(project_name: str, require_thaw: bool = False) -> bool:
+    """Ensure a project is thawed (not frozen) before operations that need dependencies.
+
+    Args:
+        project_name: Name of the project to check
+        require_thaw: If True, thawing is required (not optional)
+
+    Returns:
+        True if project is thawed or user chose to thaw it
+        False if project is frozen and user declined to thaw
+    """
+    try:
+        metadata = ProjectMetadata.load(project_name, settings.claudette_home)
+    except FileNotFoundError:
+        # No metadata means not frozen
+        return True
+
+    if not metadata.frozen:
+        return True
+
+    # Project is frozen
+    console.print(f"\n[yellow]⚠️  Project '{project_name}' is frozen[/yellow]")
+    console.print(
+        "[dim]Dependencies (node_modules and .venv) have been removed to save space.[/dim]"
+    )
+
+    if require_thaw:
+        console.print("[cyan]This operation requires the project to be thawed.[/cyan]")
+        confirm = typer.confirm("Would you like to thaw the project now?", default=True)
+    else:
+        confirm = typer.confirm("Would you like to thaw the project now?", default=False)
+
+    if not confirm:
+        if require_thaw:
+            console.print("[red]Operation cancelled - project must be thawed first[/red]")
+            console.print(f"[dim]Run: claudette thaw {project_name}[/dim]")
+        else:
+            console.print(
+                "[yellow]Proceeding without thawing - some features may not work[/yellow]"
+            )
+        return False
+
+    # Thaw the project inline
+    console.print(f"[cyan]Thawing project: {project_name}[/cyan]")
+
+    project_path = metadata.path
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Restoring dependencies...", total=None)
+
+        # Restore Python virtual environment
+        progress.update(task, description="Creating Python virtual environment...")
+        venv_path = project_path / ".venv"
+        if not venv_path.exists():
+            try:
+                run_cmd.run(
+                    ["uv", "venv", ".venv"],
+                    cwd=project_path,
+                    description="Creating virtual environment",
+                    quiet=True,
+                )
+
+                # Install Python dependencies
+                progress.update(task, description="Installing Python dependencies...")
+                requirements_files = [
+                    project_path / "requirements.txt",
+                    project_path / "requirements" / "base.txt",
+                    project_path / "requirements" / "development.txt",
+                ]
+
+                for req_file in requirements_files:
+                    if req_file.exists():
+                        run_cmd.run(
+                            ["uv", "pip", "install", "-r", str(req_file)],
+                            cwd=project_path,
+                            env={**os.environ, "VIRTUAL_ENV": str(venv_path)},
+                            description=f"Installing from {req_file.name}",
+                            quiet=True,
+                        )
+
+                # Install editable package
+                if (project_path / "setup.py").exists():
+                    run_cmd.run(
+                        ["uv", "pip", "install", "-e", "."],
+                        cwd=project_path,
+                        env={**os.environ, "VIRTUAL_ENV": str(venv_path)},
+                        description="Installing package in editable mode",
+                        quiet=True,
+                    )
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to restore Python environment: {e}[/red]")
+                return False
+
+        # Restore node_modules
+        node_modules_path = project_path / "node_modules"
+        superset_frontend = project_path / "superset-frontend"
+
+        if not node_modules_path.exists() and (project_path / "package.json").exists():
+            progress.update(task, description="Installing npm dependencies (root)...")
+            try:
+                # Use npm ci for faster, reproducible installs
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=project_path,
+                    description="Installing npm dependencies",
+                    quiet=True,
+                )
+            except subprocess.CalledProcessError:
+                # Fall back to npm install if ci fails (no package-lock.json)
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=project_path,
+                    description="Installing npm dependencies (fallback)",
+                    quiet=True,
+                )
+
+        if (
+            superset_frontend.exists()
+            and not (superset_frontend / "node_modules").exists()
+            and (superset_frontend / "package.json").exists()
+        ):
+            progress.update(task, description="Installing frontend dependencies...")
+            try:
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=superset_frontend,
+                    description="Installing frontend dependencies",
+                    quiet=True,
+                )
+            except subprocess.CalledProcessError:
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=superset_frontend,
+                    description="Installing frontend dependencies (fallback)",
+                    quiet=True,
+                )
+
+        # Update metadata
+        progress.update(task, description="Updating metadata...")
+        metadata.frozen = False
+        metadata.save(settings.claudette_home)
+
+    console.print(f"[green]✅ Project '{project_name}' thawed successfully![/green]")
+    return True
 
 
 def _branch_exists(branch_name: str) -> bool:
