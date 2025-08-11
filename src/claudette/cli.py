@@ -914,6 +914,7 @@ def list() -> None:
     )
     table.add_column("Project", style="cyan", no_wrap=True)
     table.add_column("Port", justify="right", style="green", width=6)
+    table.add_column("PR", justify="center", style="magenta", width=8)
     table.add_column("Description", style="yellow", overflow="ellipsis", no_wrap=True, ratio=3)
     table.add_column("Status", justify="center", width=8)
 
@@ -940,15 +941,20 @@ def list() -> None:
                 # Get description for display
                 description = metadata.description or "[dim]No description[/dim]"
 
+                # Format PR display
+                pr_display = f"#{metadata.pr_number}" if metadata.pr_number else "?"
+
                 table.add_row(
                     metadata.name,
                     str(metadata.port),
+                    pr_display,
                     description,
                     status,
                 )
             except Exception:
                 table.add_row(
                     project_name,
+                    "?",
                     "?",
                     "[dim]Error loading[/dim]",
                     "⚠️",
@@ -974,15 +980,20 @@ def list() -> None:
                     # Get description for display
                     description = metadata.description or "[dim]No description[/dim]"
 
+                    # Format PR display
+                    pr_display = f"#{metadata.pr_number}" if metadata.pr_number else "?"
+
                     table.add_row(
                         metadata.name,
                         str(metadata.port),
+                        pr_display,
                         description,
                         status,
                     )
                 except Exception:
                     table.add_row(
                         project_name,
+                        "?",
                         "?",
                         "[dim]Error loading[/dim]",
                         "⚠️",
@@ -1590,6 +1601,74 @@ def thaw(
 
 
 @app.command()
+def pr(
+    action: str = typer.Argument(..., help="Action: 'link' or 'clear'"),
+    pr_number: Optional[int] = typer.Argument(None, help="PR number to link (for 'link' action)"),
+    project: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project name (optional if in project dir)"
+    ),
+) -> None:
+    """🔗 Link or manage GitHub PR associations for projects.
+
+    Examples:
+        clo pr link 1234                 # Link current project to PR #1234
+        clo pr link 1234 --project rison # Link rison project to PR #1234
+        clo pr clear                     # Remove PR link from current project
+    """
+    # Determine project
+    if not project:
+        # Check if PROJECT env var is set
+        project = os.environ.get("PROJECT")
+        if not project:
+            # Try to detect from current directory
+            cwd = Path.cwd()
+            if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+                project = cwd.name
+            else:
+                console.print(
+                    "[red]❌ No project specified and not in a claudette project directory[/red]"
+                )
+                console.print("[dim]Use: clo pr link 1234 --project <project-name>[/dim]")
+                raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    if action == "link":
+        if pr_number is None:
+            console.print("[red]PR number is required for 'link' action[/red]")
+            console.print("[dim]Usage: clo pr link <pr_number>[/dim]")
+            raise typer.Exit(1)
+
+        # Update metadata with PR number
+        metadata.pr_number = pr_number
+        metadata.save(settings.claudette_home)
+
+        console.print(f"[green]✅ Linked project '{project}' to PR #{pr_number}[/green]")
+
+    elif action == "clear":
+        if metadata.pr_number is None:
+            console.print(f"[yellow]Project '{project}' has no PR association to clear[/yellow]")
+            raise typer.Exit(0)
+
+        old_pr = metadata.pr_number
+        metadata.pr_number = None
+        metadata.save(settings.claudette_home)
+
+        console.print(
+            f"[green]✅ Removed PR #{old_pr} association from project '{project}'[/green]"
+        )
+
+    else:
+        console.print(f"[red]Unknown action '{action}'. Use 'link' or 'clear'[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def open(
     project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
 ) -> None:
@@ -1704,6 +1783,10 @@ def status(
         table.add_row("Status", "[cyan]🧊 Frozen[/cyan] (dependencies removed)")
     else:
         table.add_row("Status", "[green]Active[/green]")
+
+    # Add PR information if available
+    if metadata.pr_number:
+        table.add_row("GitHub PR", f"[magenta]#{metadata.pr_number}[/magenta]")
 
     console.print(table)
     console.print()

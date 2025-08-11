@@ -26,6 +26,7 @@ class ProjectMetadata(BaseModel):
     path: Path
     description: Optional[str] = None  # From PROJECT.md summary
     frozen: bool = False  # Whether project dependencies are removed to save space
+    pr_number: Optional[int] = None  # Associated GitHub PR number
 
     def project_folder(self, claudette_home: Path) -> Path:
         """Path to the project's folder in ~/.claudette/projects/."""
@@ -51,6 +52,9 @@ PROJECT_FROZEN="{str(self.frozen).lower()}"
             # Escape quotes and newlines for shell format
             escaped_desc = self.description.replace('"', '\\"').replace("\n", "\\n")
             content += f'PROJECT_DESCRIPTION="{escaped_desc}"\n'
+
+        if self.pr_number is not None:
+            content += f'PROJECT_PR="{self.pr_number}"\n'
         metadata_file.write_text(content)
 
     @classmethod
@@ -81,12 +85,21 @@ PROJECT_FROZEN="{str(self.frozen).lower()}"
         frozen_str = metadata.get("PROJECT_FROZEN", "false").lower()
         frozen = frozen_str in ("true", "1", "yes", "on")
 
+        # Parse PR number if present
+        pr_number = None
+        if "PROJECT_PR" in metadata:
+            try:
+                pr_number = int(metadata["PROJECT_PR"])
+            except (ValueError, TypeError):
+                pr_number = None
+
         return cls(
             name=metadata["PROJECT_NAME"],
             port=int(metadata["NODE_PORT"]),
             path=Path(metadata["PROJECT_PATH"]),
             description=metadata.get("PROJECT_DESCRIPTION"),
             frozen=frozen,
+            pr_number=pr_number,
         )
 
     @classmethod
