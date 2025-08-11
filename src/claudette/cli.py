@@ -1105,20 +1105,37 @@ def deactivate() -> None:
     console.print("[dim]Or type 'exit' (may close your terminal/tmux)[/dim]")
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
 def shell(
-    project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
+    ctx: typer.Context,
 ) -> None:
-    """🐚 Drop into the main Superset Docker container for hands-on development."""
+    """🐚 Drop into Docker container shell or run a command.
+
+    Interactive shell mode:
+        clo shell                  # Enter interactive shell
+
+    Command execution mode:
+        clo shell -- ls -la          # Run a command and exit
+        clo shell -- superset db upgrade
+        clo shell -- bash -c "echo 'Hello' && ls"
+        clo shell -- python --version
+
+    Use '--' to separate shell command from arguments to run in container.
+    Note: Project must be activated or you must be in a project directory.
+    """
+    # Get command arguments from context
+    command_args = ctx.args if ctx.args else []
+
+    # Try to detect current project
+    project = os.environ.get("PROJECT")
     if not project:
-        # Try to detect current project
         cwd = Path.cwd()
         if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
             project = cwd.name
         else:
             console.print("[red]❌ Not in a claudette project directory[/red]")
-            console.print("[dim]Use: claudette activate <project-name>[/dim]")
-            console.print("[dim]Or: claudette shell <project-name>[/dim]")
+            console.print("[dim]Use: claudette activate <project-name> first[/dim]")
+            console.print("[dim]Or run from within a project directory[/dim]")
             raise typer.Exit(1)
 
     # Call activate logic directly
@@ -1138,8 +1155,15 @@ def shell(
     if not _ensure_project_thawed(project):
         console.print("[yellow]⚠️  Shell access may be limited without dependencies[/yellow]")
 
-    console.print(f"[green]🚀 Connecting to Superset container for project: {project}[/green]")
-    console.print("[dim]Dropping you into the main Superset container...[/dim]")
+    # Show appropriate message based on mode
+    if command_args:
+        console.print(
+            f"[green]🚀 Running command in Superset container for project: {project}[/green]"
+        )
+        console.print(f"[dim]Command: {' '.join(command_args)}[/dim]")
+    else:
+        console.print(f"[green]🚀 Connecting to Superset container for project: {project}[/green]")
+        console.print("[dim]Dropping you into the main Superset container...[/dim]")
 
     # Check if containers are running
     if not _is_docker_running(metadata.name):
@@ -1166,31 +1190,53 @@ def shell(
             console.print(f"[red]❌ Failed to start containers: {e.returncode}[/red]")
             raise typer.Exit(e.returncode) from e
 
-    # Execute bash in the main superset-light container
-    exec_cmd = [
-        "docker-compose",
-        "-p",
-        metadata.name,
-        "-f",
-        "docker-compose-light.yml",
-        "exec",
-        "superset-light",
-        "/bin/bash",
-    ]
+    # Build docker exec command based on mode
+    if command_args:
+        # Command execution mode - use -T flag for non-interactive
+        exec_cmd = [
+            "docker-compose",
+            "-p",
+            metadata.name,
+            "-f",
+            "docker-compose-light.yml",
+            "exec",
+            "-T",  # Disable pseudo-TTY allocation for command execution
+            "superset-light",
+        ] + command_args
+    else:
+        # Interactive shell mode
+        exec_cmd = [
+            "docker-compose",
+            "-p",
+            metadata.name,
+            "-f",
+            "docker-compose-light.yml",
+            "exec",
+            "superset-light",
+            "/bin/bash",
+        ]
 
     env = {**os.environ, "NODE_PORT": str(metadata.port)}
 
-    console.print("[dim]Use 'exit' or Ctrl+D to leave the container[/dim]")
+    if not command_args:
+        console.print("[dim]Use 'exit' or Ctrl+D to leave the container[/dim]")
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             exec_cmd,
             cwd=project_path,
             env=env,
             check=False,  # Don't raise on non-zero exit (normal when user exits)
         )
+        # For command mode, exit with the same code as the command
+        if command_args:
+            raise typer.Exit(result.returncode)
     except KeyboardInterrupt:
-        console.print("\n[dim]Exited container shell[/dim]")
+        if not command_args:
+            console.print("\n[dim]Exited container shell[/dim]")
+        else:
+            console.print("\n[yellow]Command interrupted[/yellow]")
+            raise typer.Exit(130) from None  # Standard exit code for SIGINT
 
 
 @app.command()

@@ -54,10 +54,11 @@ claudette-cli/
    - Modified PS1 prompt
    - Requires thawing if project is frozen
 
-5. **shell** - Drop into Docker container
+5. **shell** - Drop into Docker container or run commands
+   - Interactive: `clo shell` for bash shell
+   - Command: `clo shell -- <cmd>` to run and exit
    - Auto-starts containers if needed
-   - Direct access to running Superset
-   - Can take project name or detect current
+   - Examples: `clo shell -- python --version`
 
 6. **docker** - Wrapper for docker-compose
    - Automatically sets NODE_PORT

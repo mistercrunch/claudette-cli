@@ -85,7 +85,10 @@ clo add my-feature
 clo add my-feature 9007
 
 # Drop into Docker container for development
-clo shell my-feature
+clo shell
+
+# Or run a quick command
+clo shell -- python --version
 
 # Start Docker containers
 clo docker up
@@ -131,12 +134,16 @@ Creates a new worktree project with:
 - Docker configuration
 - Auto-assigns port if not specified
 
-### `claudette activate <project>` / `claudette shell [project]`
+### `claudette activate <project>` / `claudette shell`
 - `activate`: Starts a new shell with Python venv activated and project environment
-- `shell`: Drops you into the main Superset Docker container for hands-on development
+- `shell`: Drop into Docker container or run commands
+  - Interactive mode: `clo shell` enters bash shell
+  - Command mode: `clo shell -- <command>` runs command and exits
   - Auto-starts containers if not running
-  - Full access to running Superset application
-  - Direct access to database, Redis, and all services
+  - Examples:
+    - `clo shell -- python --version` - Check Python version
+    - `clo shell -- superset db upgrade` - Run database migrations
+    - `clo shell -- bash -c "ls -la | head"` - Complex commands
 
 ### `claudette list`
 Shows all projects with their ports, Docker status, freeze state, and PRs:
@@ -269,7 +276,7 @@ Claudette automatically migrates older installations to the latest structure. A 
 
 3. **Activate the project**:
    ```bash
-   clo shell new-feature        # Drop into Docker container (recommended)
+   clo shell                     # Drop into Docker container (recommended)
    # OR
    clo activate new-feature     # Activate Python venv in local shell
    ```
