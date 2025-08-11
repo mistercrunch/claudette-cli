@@ -38,6 +38,8 @@ clo --help
 - 📝 **PROJECT.md Standard** - Persistent branch docs in `~/.claudette/projects/`, symlinked to worktrees
 - 🔗 **Shared CLAUDE.local.md** - Single source of truth for Claude instructions across all projects
 - 🎯 **Auto Port Assignment** - Automatically finds available ports when not specified
+- 🧊 **Freeze/Thaw Projects** - Save ~3GB per project by removing dependencies when not in use
+- 🔗 **GitHub PR Integration** - Track and quickly access pull requests associated with projects
 
 ## Installation
 
@@ -91,11 +93,20 @@ clo docker up
 # Launch Claude with project context
 clo claude code
 
+# Link a GitHub PR to the project
+clo pr link 12345
+
 # Check project status
 clo status
 
 # List all projects
 clo list
+
+# Freeze inactive project to save space
+clo freeze old-feature
+
+# Thaw when ready to work again
+clo thaw old-feature
 
 # Clean up when done
 clo remove my-feature
@@ -128,14 +139,14 @@ Creates a new worktree project with:
   - Direct access to database, Redis, and all services
 
 ### `claudette list`
-Shows all projects with their ports and Docker status:
+Shows all projects with their ports, Docker status, freeze state, and PRs:
 ```
-┏━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
-┃ Project     ┃ Port ┃ Path                          ┃ Status ┃
-┡━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-│ my-feature  │ 9007 │ code/superset-worktree/my-... │   🟢   │
-│ bug-fix     │ 9008 │ code/superset-worktree/bug... │   ⚫   │
-└─────────────┴──────┴───────────────────────────────┴────────┘
+┏━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━┓
+┃ Project     ┃ Port ┃ Path                          ┃ Status ┃ State ┃ PR   ┃
+┡━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━┩
+│ my-feature  │ 9007 │ code/superset-worktree/my-... │   🟢   │   🟢  │ #123 │
+│ bug-fix     │ 9008 │ code/superset-worktree/bug... │   ⚫   │   🧊  │  ?   │
+└─────────────┴──────┴───────────────────────────────┴────────┴───────┴──────┘
 ```
 
 ### `claudette status [project]`
@@ -179,6 +190,25 @@ Syncs PROJECT.md content with claudette metadata:
 - Updates project description from PROJECT.md
 - Refreshes what shows in `claudette list`
 - Run after editing PROJECT.md
+
+### `claudette freeze <project>`
+Freezes a project to save disk space (~3GB per project):
+- Removes node_modules directory
+- Removes Python .venv directory
+- Project must be thawed before use
+- Use `--force` to skip confirmation
+
+### `claudette thaw <project>`
+Thaws a frozen project to restore dependencies:
+- Reinstalls npm packages with `npm ci`
+- Recreates Python venv and installs packages
+- Automatically triggered by commands that need dependencies
+
+### `claudette pr <action> [pr_number] [project]`
+Manage GitHub PR associations:
+- `clo pr link <pr_number>` - Associate a PR with current/specified project
+- `clo pr clear` - Remove PR association from current/specified project
+- `clo pr open` - Open associated PR in browser
 
 ### `claudette nuke` (DANGEROUS!)
 Completely removes claudette and all projects:
@@ -317,6 +347,16 @@ claudette add my-feature --force-new    # Delete and recreate
 claudette add my-feature --name alt-name # Use different branch name
 ```
 
+### "Project is frozen"
+Frozen projects have their dependencies removed to save space. When you try to use a frozen project:
+```bash
+# Either thaw it first
+claudette thaw my-feature
+
+# Or commands will prompt you to thaw automatically
+claudette shell my-feature  # Will ask to thaw first
+```
+
 ### "Docker containers won't start"
 ```bash
 # Check if containers are already running
@@ -365,6 +405,35 @@ clo jest superset-frontend/src/components/Button # Auto-strips prefix
 # Completely wipe the PostgreSQL database
 claudette nuke-db
 claudette docker up  # Starts fresh
+```
+
+### Managing Disk Space
+```bash
+# Freeze inactive projects to save ~3GB each
+clo freeze old-project
+clo freeze another-project --force  # Skip confirmation
+
+# List projects to see which are frozen
+clo list  # Frozen projects show 🧊 icon
+
+# Thaw when ready to work
+clo thaw old-project
+```
+
+### Working with GitHub PRs
+```bash
+# Link a PR to your project
+clo pr link 12345
+
+# View PR association
+clo status  # Shows PR number
+clo list    # Shows PR column
+
+# Open PR in browser
+clo pr open
+
+# Clear PR association
+clo pr clear
 ```
 
 ## Contributing

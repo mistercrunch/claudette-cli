@@ -32,32 +32,81 @@ claudette-cli/
    - Sets up Python venv using `uv`
    - Installs all dependencies
    - Creates `.claudette` metadata file
-   - Symlinks `CLAUDE.local.md`
+   - Symlinks `CLAUDE.local.md` and `PROJECT.md`
    - Sets up pre-commit hooks
 
 2. **remove** - Removes project and cleans up
    - Stops Docker containers
    - Removes git worktree
    - Cleans up all files
+   - `--keep-docs` flag preserves PROJECT.md
 
 3. **list** - Shows all projects in a table
    - Reads all `.claudette` files
-   - Checks Docker status
-   - Displays with Rich table
+   - Shows Docker status (🟢 Running | ⚫ Stopped | 🧊 Frozen)
+   - Shows PR associations (#1234 or ?)
+   - Displays descriptions from PROJECT.md
+   - Rich table with dynamic width
 
-4. **shell** - Starts new bash with venv activated
-   - Can take project name or detect current
+4. **activate** - Starts new shell with project environment
+   - Python venv activated
    - Sets NODE_PORT and PROJECT env vars
-   - Changes PS1 prompt
+   - Modified PS1 prompt
+   - Requires thawing if project is frozen
 
-5. **docker** - Wrapper for docker-compose
+5. **shell** - Drop into Docker container
+   - Auto-starts containers if needed
+   - Direct access to running Superset
+   - Can take project name or detect current
+
+6. **docker** - Wrapper for docker-compose
    - Automatically sets NODE_PORT
    - Uses project name for container prefix
    - Passes through all arguments
 
-6. **code** - Launches Claude Code
-   - Sets environment variables
-   - Default command if none specified
+7. **freeze/thaw** - Space-efficient project management
+   - `freeze`: Removes node_modules and .venv (~3GB saved)
+   - `thaw`: Restores dependencies with npm ci and uv
+   - Frozen projects show 🧊 in list
+   - Commands auto-prompt to thaw when needed
+
+8. **pr** - GitHub PR association management
+   - `pr link <number>`: Link project to PR
+   - `pr clear`: Remove PR association
+   - `pr open`: Open PR in browser
+   - Shows in list and status commands
+
+9. **status** - Detailed project information
+   - Git branch and changes
+   - Docker container status
+   - Python venv and node_modules status
+   - Shows frozen state and PR link
+   - Recent commits
+
+10. **jest/pytest** - Test runners
+    - `jest`: Frontend tests with npm
+    - `pytest`: Backend tests via Docker
+    - Auto-thaws frozen projects
+
+11. **open** - Open Superset in browser
+    - Opens project's frontend URL
+    - Auto-detects port from metadata
+
+12. **nuke-db** - Reset PostgreSQL database
+    - Removes Docker volume completely
+    - Fresh database on next startup
+
+13. **sync** - Sync PROJECT.md descriptions
+    - Updates metadata from PROJECT.md
+    - Refreshes list display
+
+14. **init** - Initialize claudette environment
+    - Clones Superset repository
+    - Sets up configuration
+
+15. **nuke** - Complete removal (DANGEROUS!)
+    - Removes all projects and config
+    - Requires confirmation
 
 ### Configuration (`config.py`)
 
