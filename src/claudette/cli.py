@@ -1602,7 +1602,7 @@ def thaw(
 
 @app.command()
 def pr(
-    action: str = typer.Argument(..., help="Action: 'link' or 'clear'"),
+    action: str = typer.Argument(..., help="Action: 'link', 'clear', or 'open'"),
     pr_number: Optional[int] = typer.Argument(None, help="PR number to link (for 'link' action)"),
     project: Optional[str] = typer.Option(
         None, "--project", "-p", help="Project name (optional if in project dir)"
@@ -1614,6 +1614,8 @@ def pr(
         clo pr link 1234                 # Link current project to PR #1234
         clo pr link 1234 --project rison # Link rison project to PR #1234
         clo pr clear                     # Remove PR link from current project
+        clo pr open                      # Open linked PR in browser
+        clo pr open --project rison      # Open rison's linked PR in browser
     """
     # Determine project
     if not project:
@@ -1663,8 +1665,37 @@ def pr(
             f"[green]✅ Removed PR #{old_pr} association from project '{project}'[/green]"
         )
 
+    elif action == "open":
+        if metadata.pr_number is None:
+            console.print(f"[yellow]Project '{project}' has no PR linked[/yellow]")
+            console.print(f"[dim]Use: clo pr link <number> --project {project}[/dim]")
+            raise typer.Exit(1)
+
+        # Construct GitHub URL - assuming apache/superset repository
+        pr_url = f"https://github.com/apache/superset/pull/{metadata.pr_number}"
+        console.print(f"[cyan]Opening PR #{metadata.pr_number} in browser...[/cyan]")
+        console.print(f"[dim]{pr_url}[/dim]")
+
+        try:
+            import platform
+            import subprocess
+
+            system = platform.system()
+            if system == "Darwin":  # macOS
+                subprocess.run(["open", pr_url], check=True)
+            elif system == "Linux":
+                subprocess.run(["xdg-open", pr_url], check=True)
+            elif system == "Windows":
+                subprocess.run(["start", pr_url], shell=True, check=True)
+            else:
+                console.print("[yellow]Could not detect system to open browser[/yellow]")
+                console.print(f"[dim]Please manually open: {pr_url}[/dim]")
+        except subprocess.CalledProcessError:
+            console.print("[red]❌ Failed to open browser[/red]")
+            console.print(f"[dim]Please manually open: {pr_url}[/dim]")
+
     else:
-        console.print(f"[red]Unknown action '{action}'. Use 'link' or 'clear'[/red]")
+        console.print(f"[red]Unknown action '{action}'. Use 'link', 'clear', or 'open'[/red]")
         raise typer.Exit(1)
 
 
