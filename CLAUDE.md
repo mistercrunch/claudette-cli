@@ -60,12 +60,19 @@ claudette-cli/
    - Auto-starts containers if needed
    - Examples: `clo shell -- python --version`
 
-6. **docker** - Wrapper for docker-compose
+6. **psql** - Direct PostgreSQL database access
+   - Interactive: `clo psql` for psql shell
+   - Command: `clo psql -- -c "SELECT..."` to run query
+   - Connects to db-light container automatically
+   - Database: superset_light, User: superset
+   - Examples: `clo psql -- -c "\\dt"` (list tables)
+
+7. **docker** - Wrapper for docker-compose
    - Automatically sets NODE_PORT
    - Uses project name for container prefix
    - Passes through all arguments
 
-7. **freeze/thaw** - Space-efficient project management
+8. **freeze/thaw** - Space-efficient project management
    - `freeze`: Removes node_modules and .venv (~3GB saved)
    - `thaw`: Restores dependencies with npm ci and uv
    - Frozen projects show 🧊 in list

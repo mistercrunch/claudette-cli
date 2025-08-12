@@ -1239,6 +1239,139 @@ def shell(
             raise typer.Exit(130) from None  # Standard exit code for SIGINT
 
 
+@app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
+def psql(
+    ctx: typer.Context,
+) -> None:
+    """🐘 Connect to PostgreSQL database or run SQL commands.
+
+    Interactive psql mode:
+        clo psql                           # Enter psql shell
+
+    Command execution mode:
+        clo psql -- -c "SELECT * FROM ab_user LIMIT 5;"
+        clo psql -- -c "\\dt"              # List all tables
+        clo psql -- -c "\\l"               # List databases
+        clo psql -- -f script.sql         # Run SQL file
+
+    Use '--' to separate psql command from arguments to pass to psql.
+    Note: Project must be activated or you must be in a project directory.
+    """
+    # Get command arguments from context
+    command_args = ctx.args if ctx.args else []
+
+    # Try to detect current project
+    project = os.environ.get("PROJECT")
+    if not project:
+        cwd = Path.cwd()
+        if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+            project = cwd.name
+        else:
+            console.print("[red]❌ Not in a claudette project directory[/red]")
+            console.print("[dim]Use: claudette activate <project-name> first[/dim]")
+            console.print("[dim]Or run from within a project directory[/dim]")
+            raise typer.Exit(1)
+
+    # Call activate logic directly
+    project_path = settings.worktree_base / project
+    if not project_path.exists():
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    # Check if project is frozen - psql needs Docker running
+    if not _ensure_project_thawed(project):
+        console.print("[yellow]⚠️  Database access may be limited without dependencies[/yellow]")
+
+    # Show appropriate message based on mode
+    if command_args:
+        console.print(f"[green]🐘 Running SQL command for project: {project}[/green]")
+        console.print(f"[dim]Arguments: {' '.join(command_args)}[/dim]")
+    else:
+        console.print(f"[green]🐘 Connecting to PostgreSQL for project: {project}[/green]")
+        console.print("[dim]Database: superset_light | User: superset[/dim]")
+
+    # Check if containers are running
+    if not _is_docker_running(metadata.name):
+        console.print("[yellow]⚠️  Docker containers not running[/yellow]")
+        console.print("[dim]Starting containers first...[/dim]")
+
+        # Start containers
+        start_cmd = [
+            "docker-compose",
+            "-p",
+            metadata.name,
+            "-f",
+            "docker-compose-light.yml",
+            "up",
+            "-d",
+        ]
+        env = {**os.environ, "NODE_PORT": str(metadata.port)}
+        try:
+            run_cmd.run(
+                start_cmd, cwd=project_path, env=env, description="Starting Docker containers"
+            )
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]❌ Failed to start containers: {e.returncode}[/red]")
+            raise typer.Exit(e.returncode) from e
+
+    # Build docker exec command for psql
+    base_cmd = [
+        "docker-compose",
+        "-p",
+        metadata.name,
+        "-f",
+        "docker-compose-light.yml",
+        "exec",
+    ]
+
+    # Add -T flag for non-interactive if running a command
+    if command_args:
+        base_cmd.append("-T")
+
+    # Target the db-light container and run psql
+    exec_cmd = (
+        base_cmd
+        + [
+            "db-light",
+            "psql",
+            "-U",
+            "superset",
+            "-d",
+            "superset_light",
+        ]
+        + command_args
+    )
+
+    env = {**os.environ, "NODE_PORT": str(metadata.port)}
+
+    if not command_args:
+        console.print("[dim]Type \\q to exit, \\? for help[/dim]")
+
+    try:
+        result = subprocess.run(
+            exec_cmd,
+            cwd=project_path,
+            env=env,
+            check=False,  # Don't raise on non-zero exit
+        )
+        # For command mode, exit with the same code as psql
+        if command_args:
+            raise typer.Exit(result.returncode)
+    except KeyboardInterrupt:
+        if not command_args:
+            console.print("\n[dim]Exited psql[/dim]")
+        else:
+            console.print("\n[yellow]SQL command interrupted[/yellow]")
+            raise typer.Exit(130) from None  # Standard exit code for SIGINT
+
+
 @app.command()
 def docker(
     ctx: typer.Context,  # noqa: ARG001

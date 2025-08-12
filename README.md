@@ -90,6 +90,9 @@ clo shell
 # Or run a quick command
 clo shell -- python --version
 
+# Access the database directly
+clo psql -- -c "\\dt"
+
 # Start Docker containers
 clo docker up
 
@@ -179,6 +182,16 @@ Launches claude CLI with project context:
 Run tests with project context:
 - `jest`: Frontend tests with all arguments passed to npm test
 - `pytest`: Backend tests using Docker with automatic test database setup
+
+### `claudette psql`
+Direct PostgreSQL database access:
+- Interactive mode: `clo psql` enters psql shell
+- Command mode: `clo psql -- -c "SELECT..."` runs query and exits
+- Auto-starts containers if not running
+- Examples:
+  - `clo psql -- -c "\\dt"` - List all tables
+  - `clo psql -- -c "SELECT COUNT(*) FROM ab_user;"` - Run query
+  - `clo psql -- -f script.sql` - Execute SQL file
 
 ### `claudette nuke-db [project]`
 Nukes the PostgreSQL database volume:
