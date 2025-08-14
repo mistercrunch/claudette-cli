@@ -220,6 +220,7 @@ class ClaudetteSettings(BaseSettings):
     model_config = {
         "env_prefix": "CLAUDETTE_",
         "env_file": ".env",
+        "extra": "ignore",  # Ignore extra environment variables
     }
 
     def __init__(self, **kwargs):
