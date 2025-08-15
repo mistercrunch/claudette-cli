@@ -836,6 +836,10 @@ def remove(
                 errors_occurred.append(f"Directory removal failed: {e}")
                 console.print(f"[red]❌ Failed to remove directory: {e}[/red]")
 
+    # Archive PROJECT.md before cleanup (if it exists and we're not keeping docs)
+    if metadata and not keep_docs:
+        _archive_project_docs(metadata, settings)
+
     # Handle project folder and metadata (always try to clean up)
     console.print("[dim]Cleaning up project metadata...[/dim]")
 
@@ -2699,6 +2703,99 @@ def _handle_branch_conflict(
 
         else:
             console.print("[red]Invalid choice. Please enter 1, 2, 3, or 4.[/red]")
+
+
+def _archive_project_docs(metadata: ProjectMetadata, settings: ClaudetteSettings) -> None:
+    """Archive PROJECT.md and other important files before project removal."""
+    project_folder = metadata.project_folder(settings.claudette_home)
+    if not project_folder.exists():
+        return
+
+    # Check if PROJECT.md exists
+    project_md = project_folder / "PROJECT.md"
+    if not project_md.exists():
+        return
+
+    # Create archive directory structure
+    archive_dir = settings.archive_path / metadata.name
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate timestamp for the archive
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    try:
+        import shutil
+
+        # Archive PROJECT.md with timestamp
+        archived_project_md = archive_dir / f"PROJECT_{timestamp}.md"
+        shutil.copy2(project_md, archived_project_md)
+
+        # Also keep a copy as latest
+        latest_project_md = archive_dir / "PROJECT_latest.md"
+        shutil.copy2(project_md, latest_project_md)
+
+        console.print(f"[green]📁 Archived PROJECT.md to {archived_project_md}[/green]")
+
+        # Archive metadata as well
+        metadata_file = project_folder / ".claudette"
+        if metadata_file.exists():
+            archived_metadata = archive_dir / f"claudette_{timestamp}.txt"
+            shutil.copy2(metadata_file, archived_metadata)
+            console.print(f"[dim]📄 Archived metadata to {archived_metadata}[/dim]")
+
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Could not archive PROJECT.md: {e}[/yellow]")
+
+
+@app.command()
+def archive(
+    list_archives: bool = typer.Option(False, "--list", "-l", help="List archived projects"),
+) -> None:
+    """📁 Manage archived PROJECT.md files.
+
+    Archives are created automatically when removing projects.
+    Use --list to see all archived projects and their files.
+    """
+    if list_archives:
+        archive_path = settings.archive_path
+
+        if not archive_path.exists():
+            console.print("[dim]No archived projects found.[/dim]")
+            return
+
+        archived_projects = [d for d in archive_path.iterdir() if d.is_dir()]
+
+        if not archived_projects:
+            console.print("[dim]No archived projects found.[/dim]")
+            return
+
+        console.print(
+            f"\n[bold green]📁 Archived Projects[/bold green] ([dim]{archive_path}[/dim])\n"
+        )
+
+        for project_dir in sorted(archived_projects):
+            project_name = project_dir.name
+            console.print(f"[cyan]{project_name}[/cyan]")
+
+            # List PROJECT.md files
+            project_files = list(project_dir.glob("PROJECT_*.md"))
+            metadata_files = list(project_dir.glob("claudette_*.txt"))
+
+            if project_files:
+                console.print(f"  📄 {len(project_files)} archived versions:")
+                for f in sorted(project_files, reverse=True):  # Most recent first
+                    size = f.stat().st_size
+                    console.print(f"    • {f.name} ({size} bytes)")
+
+            if metadata_files:
+                console.print(f"  ⚙️  {len(metadata_files)} metadata snapshots")
+
+            console.print()
+    else:
+        console.print("[yellow]Use --list to see archived projects[/yellow]")
+        console.print(f"[dim]Archive location: {settings.archive_path}[/dim]")
 
 
 @app.command()

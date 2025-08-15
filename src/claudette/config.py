@@ -209,6 +209,7 @@ class ClaudetteSettings(BaseSettings):
     claudette_home: Path = Path.home() / ".claudette"
     worktree_base: Optional[Path] = None
     superset_base: Optional[Path] = None
+    archive_path: Optional[Path] = None
     default_branch: str = "master"
     python_version: str = "python3.11"
     superset_repo_url: str = "git@github.com:apache/superset.git"
@@ -230,6 +231,8 @@ class ClaudetteSettings(BaseSettings):
             self.worktree_base = self.claudette_home / "worktrees"
         if not self.superset_base:
             self.superset_base = self.claudette_home / ".superset"
+        if not self.archive_path:
+            self.archive_path = self.claudette_home / "archive"
 
         # Auto-discover files from claudette home if not set
         if not self.claude_local_md and (self.claudette_home / "CLAUDE.local.md").exists():
