@@ -1402,6 +1402,11 @@ def docker(
 
     # Run docker-compose
     env = {**os.environ, "NODE_PORT": str(metadata.port)}
+
+    # Show port info if running 'up' or 'ps' commands
+    if args and (args[0] in ["up", "ps", "logs"]):
+        console.print(f"[dim]Using NODE_PORT={metadata.port} for container mapping[/dim]")
+
     cmd = [
         "docker-compose",
         "-p",
@@ -1880,6 +1885,84 @@ def pr(
     else:
         console.print(f"[red]Unknown action '{action}'. Use 'link', 'clear', or 'open'[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def ports(
+    project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
+) -> None:
+    """🔌 Show port information and check if services are accessible."""
+    # Determine project
+    if not project:
+        # Check if PROJECT env var is set
+        project = os.environ.get("PROJECT")
+        if not project:
+            # Try to detect from current directory
+            cwd = Path.cwd()
+            if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+                project = cwd.name
+            else:
+                console.print(
+                    "[red]❌ No project specified and not in a claudette project directory[/red]"
+                )
+                raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    console.print(f"\n[bold cyan]🔌 Port Configuration for {project}[/bold cyan]\n")
+
+    # Show configured port
+    console.print(f"[green]Configured port:[/green] {metadata.port}")
+    console.print(f"[dim]External URL: http://localhost:{metadata.port}[/dim]")
+    console.print("[dim]Container internal: http://localhost:9000 (webpack-dev-server)[/dim]\n")
+
+    # Check if Docker containers are running
+    docker_running = _is_docker_running(metadata.name)
+    if docker_running:
+        console.print("[green]✅ Docker containers are running[/green]")
+
+        # Show actual port mappings for the node container specifically
+        console.print("\n[yellow]Host-accessible ports:[/yellow]")
+        cmd = ["docker", "port", f"{metadata.name}-superset-node-light-1"]
+        result = run_cmd.run(cmd, capture=True, quiet=True, check=False)
+        if result.returncode == 0 and result.stdout:
+            # Parse docker port output (format: "9000/tcp -> 0.0.0.0:9012")
+            for line in result.stdout.strip().split("\n"):
+                if "->" in line:
+                    container_port, host_mapping = line.split(" -> ")
+                    host_port = host_mapping.split(":")[-1]
+                    console.print(f"  • Container port {container_port} → localhost:{host_port}")
+        else:
+            console.print(f"  • Expected: localhost:{metadata.port} → container:9000")
+            console.print("  [dim](Could not verify actual mapping)[/dim]")
+
+        # Test connectivity to the port
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        try:
+            result = sock.connect_ex(("localhost", metadata.port))
+            if result == 0:
+                console.print(f"\n[green]✅ Port {metadata.port} is accessible[/green]")
+                console.print(f"[dim]Try: claudette open {project}[/dim]")
+            else:
+                console.print(f"\n[red]❌ Port {metadata.port} is not responding[/red]")
+                console.print("[yellow]Possible issues:[/yellow]")
+                console.print("  • Container port mapping may be incorrect")
+                console.print("  • Service inside container may not be running")
+                console.print("  • Firewall may be blocking the port")
+                console.print("\n[dim]Check logs: claudette docker logs superset-node-light[/dim]")
+        finally:
+            sock.close()
+    else:
+        console.print("[red]❌ Docker containers are not running[/red]")
+        console.print("[dim]Start them with: claudette docker up -d[/dim]")
 
 
 @app.command()
