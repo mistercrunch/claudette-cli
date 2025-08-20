@@ -1789,6 +1789,264 @@ def thaw(
 
 
 @app.command()
+def deps(
+    project: Optional[str] = typer.Argument(None, help="Project name (optional if in project dir)"),
+    backend_only: bool = typer.Option(
+        False, "--backend-only", help="Only resync Python dependencies"
+    ),
+    frontend_only: bool = typer.Option(
+        False, "--frontend-only", help="Only resync npm dependencies"
+    ),
+    nuke: bool = typer.Option(
+        False, "--nuke", help="Nuclear option: remove and reinstall everything"
+    ),
+) -> None:
+    """🔄 Resync dependencies after rebase or branch changes.
+
+    By default, performs a quick resync by updating existing dependencies.
+    Use --nuke for complete removal and reinstallation when facing conflicts.
+
+    Examples:
+        clo deps                      # Quick resync of all dependencies
+        clo deps --backend-only       # Only resync Python packages
+        clo deps --frontend-only      # Only resync npm packages
+        clo deps --nuke              # Nuclear: remove and reinstall everything
+    """
+    # Determine project
+    if not project:
+        # Check if PROJECT env var is set
+        project = os.environ.get("PROJECT")
+        if not project:
+            # Try to detect from current directory
+            cwd = Path.cwd()
+            if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+                project = cwd.name
+            else:
+                console.print(
+                    "[red]❌ No project specified and not in a claudette project directory[/red]"
+                )
+                console.print("[dim]Use: clo deps <project-name>[/dim]")
+                console.print("[dim]Or run from within a project directory[/dim]")
+                raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]No metadata found for project {project}[/red]")
+        raise typer.Exit(1) from None
+
+    project_path = metadata.path
+
+    if not project_path.exists():
+        console.print(f"[red]Project directory not found: {project_path}[/red]")
+        raise typer.Exit(1)
+
+    # Check if project is frozen
+    if not _ensure_project_thawed(project, require_thaw=False):
+        console.print("[red]❌ Project is frozen. Dependencies cannot be resynced.[/red]")
+        console.print(f"[dim]Thaw first with: clo thaw {project}[/dim]")
+        raise typer.Exit(1)
+
+    # Validate exclusive options
+    if backend_only and frontend_only:
+        console.print("[red]❌ Cannot use --backend-only and --frontend-only together[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold cyan]🔄 Resyncing dependencies for {project}[/bold cyan]")
+    if nuke:
+        console.print(
+            "[yellow]⚠️  Using nuclear option: complete removal and reinstallation[/yellow]"
+        )
+    else:
+        console.print("[green]Using quick resync: updating existing dependencies[/green]")
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Resyncing dependencies...", total=None)
+
+        # Backend (Python) dependencies
+        if not frontend_only:
+            venv_path = project_path / ".venv"
+
+            if nuke and venv_path.exists():
+                progress.update(task, description="Removing Python virtual environment...")
+                import shutil
+
+                shutil.rmtree(venv_path)
+                console.print("[yellow]🗑️  Removed .venv directory[/yellow]")
+
+            # Create venv if it doesn't exist (for nuke mode or missing venv)
+            if not venv_path.exists():
+                progress.update(task, description="Creating Python virtual environment...")
+                run_cmd.run(
+                    ["uv", "venv", "-p", settings.python_version],
+                    cwd=project_path,
+                    description="Creating Python virtual environment",
+                )
+
+            # Install Python dependencies
+            progress.update(task, description="Installing Python dependencies...")
+            requirements_files = [
+                project_path / "requirements" / "development.txt",
+                project_path / "requirements.txt",
+            ]
+
+            for req_file in requirements_files:
+                if req_file.exists():
+                    try:
+                        run_cmd.run(
+                            [
+                                "uv",
+                                "pip",
+                                "install",
+                                "-r",
+                                str(req_file),
+                                "--python",
+                                str(venv_path / "bin" / "python"),
+                            ],
+                            cwd=project_path,
+                            description=f"Installing from {req_file.name}",
+                        )
+                        break
+                    except subprocess.CalledProcessError as e:
+                        console.print(
+                            f"[yellow]⚠️  Failed to install from {req_file.name}: {e}[/yellow]"
+                        )
+                        continue
+
+            # Install editable package
+            if (project_path / "setup.py").exists():
+                progress.update(task, description="Installing package in editable mode...")
+                try:
+                    run_cmd.run(
+                        [
+                            "uv",
+                            "pip",
+                            "install",
+                            "-e",
+                            ".",
+                            "--python",
+                            str(venv_path / "bin" / "python"),
+                        ],
+                        cwd=project_path,
+                        description="Installing package in editable mode",
+                    )
+                except subprocess.CalledProcessError as e:
+                    console.print(
+                        f"[yellow]⚠️  Failed to install package in editable mode: {e}[/yellow]"
+                    )
+
+            console.print("[green]✅ Python dependencies resynced[/green]")
+
+        # Frontend (npm) dependencies
+        if not backend_only:
+            # Root npm dependencies
+            root_node_modules = project_path / "node_modules"
+            root_package_json = project_path / "package.json"
+
+            if root_package_json.exists():
+                if nuke:
+                    # Remove node_modules and package-lock.json
+                    if root_node_modules.exists():
+                        progress.update(task, description="Removing root node_modules...")
+                        import shutil
+
+                        shutil.rmtree(root_node_modules)
+                        console.print("[yellow]🗑️  Removed root node_modules[/yellow]")
+
+                    root_lock = project_path / "package-lock.json"
+                    if root_lock.exists():
+                        root_lock.unlink()
+                        console.print("[yellow]🗑️  Removed root package-lock.json[/yellow]")
+
+                # Install root dependencies
+                progress.update(task, description="Installing root npm dependencies...")
+                try:
+                    if not nuke and (project_path / "package-lock.json").exists():
+                        run_cmd.run(
+                            ["npm", "ci"],
+                            cwd=project_path,
+                            description="Installing root npm dependencies",
+                        )
+                    else:
+                        run_cmd.run(
+                            ["npm", "install"],
+                            cwd=project_path,
+                            description="Installing root npm dependencies",
+                        )
+                except subprocess.CalledProcessError:
+                    # Fallback to npm install
+                    run_cmd.run(
+                        ["npm", "install"],
+                        cwd=project_path,
+                        description="Installing root npm dependencies (fallback)",
+                    )
+
+            # Frontend npm dependencies
+            superset_frontend = project_path / "superset-frontend"
+            frontend_node_modules = superset_frontend / "node_modules"
+            frontend_package_json = superset_frontend / "package.json"
+
+            if frontend_package_json.exists():
+                if nuke:
+                    # Remove node_modules and package-lock.json
+                    if frontend_node_modules.exists():
+                        progress.update(task, description="Removing frontend node_modules...")
+                        import shutil
+
+                        shutil.rmtree(frontend_node_modules)
+                        console.print("[yellow]🗑️  Removed frontend node_modules[/yellow]")
+
+                    frontend_lock = superset_frontend / "package-lock.json"
+                    if frontend_lock.exists():
+                        frontend_lock.unlink()
+                        console.print("[yellow]🗑️  Removed frontend package-lock.json[/yellow]")
+
+                # Install frontend dependencies
+                progress.update(task, description="Installing frontend npm dependencies...")
+                try:
+                    if not nuke and (superset_frontend / "package-lock.json").exists():
+                        run_cmd.run(
+                            ["npm", "ci"],
+                            cwd=superset_frontend,
+                            description="Installing frontend npm dependencies",
+                        )
+                    else:
+                        run_cmd.run(
+                            ["npm", "install"],
+                            cwd=superset_frontend,
+                            description="Installing frontend npm dependencies",
+                        )
+                except subprocess.CalledProcessError:
+                    # Fallback to npm install
+                    run_cmd.run(
+                        ["npm", "install"],
+                        cwd=superset_frontend,
+                        description="Installing frontend npm dependencies (fallback)",
+                    )
+
+            console.print("[green]✅ Frontend dependencies resynced[/green]")
+
+    console.print(
+        f"\n[bold green]🎉 Dependencies for '{project}' have been resynced successfully![/bold green]"
+    )
+
+    if nuke:
+        console.print(
+            "[dim]Nuclear resync complete. All dependencies were reinstalled from scratch.[/dim]"
+        )
+    else:
+        console.print(
+            "[dim]Quick resync complete. Use --nuke if you still have dependency conflicts.[/dim]"
+        )
+
+
+@app.command()
 def pr(
     action: str = typer.Argument(..., help="Action: 'link', 'clear', or 'open'"),
     pr_number: Optional[int] = typer.Argument(None, help="PR number to link (for 'link' action)"),
