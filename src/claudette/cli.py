@@ -539,6 +539,7 @@ def add(
             ],
             cwd=project_path,
             description="Installing Python development dependencies",
+            quiet=True,  # Avoid spinner conflicts with uv's progress
         )
         run_cmd.run(
             [
@@ -552,6 +553,7 @@ def add(
             ],
             cwd=project_path,
             description="Installing Superset in editable mode",
+            quiet=True,  # Avoid spinner conflicts with uv's progress
         )
 
         # Step 6: Symlink CLAUDE.local.md if exists
@@ -663,6 +665,7 @@ cd superset-frontend && npm test
             ["npm", "install"],
             cwd=project_path / "superset-frontend",
             description="Installing frontend dependencies",
+            quiet=True,  # Avoid spinner conflicts with npm's progress
         )
 
         # Step 10: Setup pre-commit
@@ -677,26 +680,94 @@ cd superset-frontend && npm test
     # Success!
     console.print("\n[bold green]✨ Project created successfully![/bold green]\n")
 
-    # Create a table for next steps
-    next_steps_table = Table(show_header=False, box=None, padding=(0, 2))
-    next_steps_table.add_column("Command", style="cyan", no_wrap=True)
-    next_steps_table.add_column("Description", style="dim")
+    # Ask if user wants to activate the project immediately
+    activate_now = typer.confirm("Would you like to activate this project now?", default=True)
 
-    next_steps_table.add_row(
-        f"claudette activate {project}", "Start a shell with Python venv activated"
-    )
-    next_steps_table.add_row("claudette docker up", "Start PostgreSQL database and Redis")
-    next_steps_table.add_row("claudette open", f"Open browser at http://localhost:{port}")
-    next_steps_table.add_row("claudette claude code", "Launch Claude Code with project context")
+    if activate_now:
+        console.print(f"\n[green]🚀 Activating project: {project}[/green]")
+        console.print("[dim]Setting up project environment...[/dim]")
 
-    panel = Panel(
-        next_steps_table,
-        title="[bold]🚀 Get Started[/bold]",
-        subtitle=f"[dim]Project: {project} | Port: {port}[/dim]",
-        border_style="green",
-        expand=False,
-    )
-    console.print(panel)
+        # Create activation script (same as in activate command)
+        activate_script = f"""
+# Source user's bashrc first
+source ~/.bashrc 2>/dev/null || true
+
+# Set environment variables
+export NODE_PORT={metadata.port}
+export PROJECT={metadata.name}
+
+# Navigate to project directory
+cd {project_path}
+
+# Activate Python virtual environment
+source .venv/bin/activate
+
+# Only modify prompt if PS1 exists and we're in a compatible shell
+if [ -n "$PS1" ] && ([ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]); then
+    PS1="({metadata.name}) $PS1"
+fi
+
+# Show activation status (using ANSI green for 'activated')
+echo
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo -e "🚀 Project '{metadata.name}' \\033[32mactivated\\033[0m - You are now in a project shell"
+echo -e "\\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m"
+echo
+echo "✓ Directory: $(pwd)"
+echo -e "✓ Virtual environment: \\033[32mactivated\\033[0m"
+echo "✓ PROJECT=$PROJECT"
+echo "✓ NODE_PORT=$NODE_PORT"
+echo
+echo "💡 This is a nested shell session. Press Ctrl+D to exit and return to your original shell."
+echo -e "\\033[90mPython: $(which python)\\033[0m"
+echo
+echo "🚀 Quick next steps:"
+echo "  • claudette docker up    (start database)"
+echo "  • claudette open         (open browser)"
+echo
+
+"""
+
+        # Write activation script to a temporary file
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+            f.write(activate_script)
+            temp_script = f.name
+
+        try:
+            # Start bash in the project directory with our activation script
+            subprocess.run(
+                ["bash", "--rcfile", temp_script],
+                cwd=project_path,  # Start in project directory
+                check=False,
+            )
+        finally:
+            # Clean up temp file
+            Path(temp_script).unlink(missing_ok=True)
+    else:
+        # Show next steps if not activating
+        console.print("\n[dim]Quick start commands:[/dim]")
+
+        # Create a table for next steps
+        next_steps_table = Table(show_header=False, box=None, padding=(0, 2))
+        next_steps_table.add_column("Command", style="cyan", no_wrap=True)
+        next_steps_table.add_column("Description", style="dim")
+
+        next_steps_table.add_row(
+            f"claudette activate {project}", "Start a shell with Python venv activated"
+        )
+        next_steps_table.add_row("claudette docker up", "Start PostgreSQL database and Redis")
+        next_steps_table.add_row("claudette open", f"Open browser at http://localhost:{port}")
+
+        panel = Panel(
+            next_steps_table,
+            title="[bold]🚀 Get Started[/bold]",
+            subtitle=f"[dim]Project: {project} | Port: {port}[/dim]",
+            border_style="green",
+            expand=False,
+        )
+        console.print(panel)
 
 
 @app.command()
