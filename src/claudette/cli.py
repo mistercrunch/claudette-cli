@@ -526,35 +526,45 @@ def add(
         progress.update(
             task, description="Installing Python dependencies (this may take a while)..."
         )
-        # Use system uv with the venv's pip
-        run_cmd.run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "-r",
-                "requirements/development.txt",
-                "--python",
-                str(project_path / ".venv" / "bin" / "python"),
-            ],
-            cwd=project_path,
-            description="Installing Python development dependencies",
-            quiet=True,  # Avoid spinner conflicts with uv's progress
-        )
-        run_cmd.run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "-e",
-                ".",
-                "--python",
-                str(project_path / ".venv" / "bin" / "python"),
-            ],
-            cwd=project_path,
-            description="Installing Superset in editable mode",
-            quiet=True,  # Avoid spinner conflicts with uv's progress
-        )
+
+    # Temporarily exit Progress context for uv operations to avoid spinner conflicts
+    console.print("[dim]Installing Python development dependencies...[/dim]")
+    run_cmd.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "-r",
+            "requirements/development.txt",
+            "--python",
+            str(project_path / ".venv" / "bin" / "python"),
+        ],
+        cwd=project_path,
+        description="Installing Python development dependencies",
+    )
+
+    console.print("[dim]Installing Superset in editable mode...[/dim]")
+    run_cmd.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "-e",
+            ".",
+            "--python",
+            str(project_path / ".venv" / "bin" / "python"),
+        ],
+        cwd=project_path,
+        description="Installing Superset in editable mode",
+    )
+
+    # Resume Progress context
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Continuing setup...", total=None)
 
         # Step 6: Symlink CLAUDE.local.md if exists
         progress.update(task, description="Setting up Claude configuration...")
@@ -661,12 +671,22 @@ cd superset-frontend && npm test
 
         # Step 9: Install frontend dependencies
         progress.update(task, description="Installing frontend dependencies...")
-        run_cmd.run(
-            ["npm", "install"],
-            cwd=project_path / "superset-frontend",
-            description="Installing frontend dependencies",
-            quiet=True,  # Avoid spinner conflicts with npm's progress
-        )
+
+    # Temporarily exit Progress context for npm install to avoid spinner conflicts
+    console.print("[dim]Installing frontend dependencies...[/dim]")
+    run_cmd.run(
+        ["npm", "install"],
+        cwd=project_path / "superset-frontend",
+        description="Installing frontend dependencies",
+    )
+
+    # Resume Progress context for final steps
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Finishing setup...", total=None)
 
         # Step 10: Setup pre-commit
         progress.update(task, description="Setting up pre-commit hooks...")
