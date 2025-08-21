@@ -2105,13 +2105,22 @@ def deps(
     if not backend_only:
         root_package_json = project_path / "package.json"
         if root_package_json.exists():
-            # Install root dependencies - always use npm install for deps refresh
+            # Install root dependencies
             console.print("[dim]Installing root npm dependencies...[/dim]")
-            run_cmd.run(
-                ["npm", "install"],
-                cwd=project_path,
-                description="Installing root npm dependencies",
-            )
+            if nuke and (project_path / "package-lock.json").exists():
+                # Use npm ci for clean installs after nuke (reproducible from lockfile)
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=project_path,
+                    description="Installing root npm dependencies (clean)",
+                )
+            else:
+                # Use npm install for normal refresh (updates to compatible versions)
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=project_path,
+                    description="Installing root npm dependencies (refresh)",
+                )
 
         # Frontend npm dependencies
         superset_frontend = project_path / "superset-frontend"
@@ -2119,13 +2128,22 @@ def deps(
         frontend_package_json = superset_frontend / "package.json"
 
         if frontend_package_json.exists():
-            # Install frontend dependencies - always use npm install for deps refresh
+            # Install frontend dependencies
             console.print("[dim]Installing frontend npm dependencies...[/dim]")
-            run_cmd.run(
-                ["npm", "install"],
-                cwd=superset_frontend,
-                description="Installing frontend npm dependencies",
-            )
+            if nuke and (superset_frontend / "package-lock.json").exists():
+                # Use npm ci for clean installs after nuke (reproducible from lockfile)
+                run_cmd.run(
+                    ["npm", "ci"],
+                    cwd=superset_frontend,
+                    description="Installing frontend npm dependencies (clean)",
+                )
+            else:
+                # Use npm install for normal refresh (updates to compatible versions)
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=superset_frontend,
+                    description="Installing frontend npm dependencies (refresh)",
+                )
 
         console.print("[green]✅ Frontend dependencies resynced[/green]")
 
