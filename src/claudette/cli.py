@@ -2105,28 +2105,13 @@ def deps(
     if not backend_only:
         root_package_json = project_path / "package.json"
         if root_package_json.exists():
-            # Install root dependencies
+            # Install root dependencies - always use npm install for deps refresh
             console.print("[dim]Installing root npm dependencies...[/dim]")
-            try:
-                if not nuke and (project_path / "package-lock.json").exists():
-                    run_cmd.run(
-                        ["npm", "ci"],
-                        cwd=project_path,
-                        description="Installing root npm dependencies",
-                    )
-                else:
-                    run_cmd.run(
-                        ["npm", "install"],
-                        cwd=project_path,
-                        description="Installing root npm dependencies",
-                    )
-            except subprocess.CalledProcessError:
-                # Fallback to npm install
-                run_cmd.run(
-                    ["npm", "install"],
-                    cwd=project_path,
-                    description="Installing root npm dependencies (fallback)",
-                )
+            run_cmd.run(
+                ["npm", "install"],
+                cwd=project_path,
+                description="Installing root npm dependencies",
+            )
 
         # Frontend npm dependencies
         superset_frontend = project_path / "superset-frontend"
@@ -2134,28 +2119,13 @@ def deps(
         frontend_package_json = superset_frontend / "package.json"
 
         if frontend_package_json.exists():
-            # Install frontend dependencies
+            # Install frontend dependencies - always use npm install for deps refresh
             console.print("[dim]Installing frontend npm dependencies...[/dim]")
-            try:
-                if not nuke and (superset_frontend / "package-lock.json").exists():
-                    run_cmd.run(
-                        ["npm", "ci"],
-                        cwd=superset_frontend,
-                        description="Installing frontend npm dependencies",
-                    )
-                else:
-                    run_cmd.run(
-                        ["npm", "install"],
-                        cwd=superset_frontend,
-                        description="Installing frontend npm dependencies",
-                    )
-            except subprocess.CalledProcessError:
-                # Fallback to npm install
-                run_cmd.run(
-                    ["npm", "install"],
-                    cwd=superset_frontend,
-                    description="Installing frontend npm dependencies (fallback)",
-                )
+            run_cmd.run(
+                ["npm", "install"],
+                cwd=superset_frontend,
+                description="Installing frontend npm dependencies",
+            )
 
         console.print("[green]✅ Frontend dependencies resynced[/green]")
 
