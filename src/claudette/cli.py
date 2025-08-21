@@ -1998,146 +1998,166 @@ def deps(
 
             # Install Python dependencies
             progress.update(task, description="Installing Python dependencies...")
-            requirements_files = [
-                project_path / "requirements" / "development.txt",
-                project_path / "requirements.txt",
-            ]
 
-            for req_file in requirements_files:
-                if req_file.exists():
-                    try:
-                        run_cmd.run(
-                            [
-                                "uv",
-                                "pip",
-                                "install",
-                                "-r",
-                                str(req_file),
-                                "--python",
-                                str(venv_path / "bin" / "python"),
-                            ],
-                            cwd=project_path,
-                            description=f"Installing from {req_file.name}",
-                        )
-                        break
-                    except subprocess.CalledProcessError as e:
-                        console.print(
-                            f"[yellow]⚠️  Failed to install from {req_file.name}: {e}[/yellow]"
-                        )
-                        continue
+    # Temporarily exit Progress context for uv operations to avoid spinner conflicts
+    if not frontend_only:
+        requirements_files = [
+            project_path / "requirements" / "development.txt",
+            project_path / "requirements.txt",
+        ]
 
-            # Install editable package
-            if (project_path / "setup.py").exists():
-                progress.update(task, description="Installing package in editable mode...")
+        for req_file in requirements_files:
+            if req_file.exists():
                 try:
+                    console.print(f"[dim]Installing from {req_file.name}...[/dim]")
                     run_cmd.run(
                         [
                             "uv",
                             "pip",
                             "install",
-                            "-e",
-                            ".",
+                            "-r",
+                            str(req_file),
                             "--python",
                             str(venv_path / "bin" / "python"),
                         ],
                         cwd=project_path,
-                        description="Installing package in editable mode",
+                        description=f"Installing from {req_file.name}",
                     )
+                    break
                 except subprocess.CalledProcessError as e:
                     console.print(
-                        f"[yellow]⚠️  Failed to install package in editable mode: {e}[/yellow]"
+                        f"[yellow]⚠️  Failed to install from {req_file.name}: {e}[/yellow]"
                     )
+                    continue
 
-            console.print("[green]✅ Python dependencies resynced[/green]")
+        # Install editable package
+        if (project_path / "setup.py").exists():
+            try:
+                console.print("[dim]Installing package in editable mode...[/dim]")
+                run_cmd.run(
+                    [
+                        "uv",
+                        "pip",
+                        "install",
+                        "-e",
+                        ".",
+                        "--python",
+                        str(venv_path / "bin" / "python"),
+                    ],
+                    cwd=project_path,
+                    description="Installing package in editable mode",
+                )
+            except subprocess.CalledProcessError as e:
+                console.print(
+                    f"[yellow]⚠️  Failed to install package in editable mode: {e}[/yellow]"
+                )
 
-        # Frontend (npm) dependencies
+        console.print("[green]✅ Python dependencies resynced[/green]")
+
+    # Resume Progress context for frontend dependencies
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Continuing resync...", total=None)
+
+        # Frontend (npm) dependencies setup
         if not backend_only:
             # Root npm dependencies
             root_node_modules = project_path / "node_modules"
             root_package_json = project_path / "package.json"
 
-            if root_package_json.exists():
-                if nuke:
-                    # Remove node_modules and package-lock.json
-                    if root_node_modules.exists():
-                        progress.update(task, description="Removing root node_modules...")
-                        import shutil
+            if root_package_json.exists() and nuke:
+                # Remove node_modules and package-lock.json
+                if root_node_modules.exists():
+                    progress.update(task, description="Removing root node_modules...")
+                    import shutil
 
-                        shutil.rmtree(root_node_modules)
-                        console.print("[yellow]🗑️  Removed root node_modules[/yellow]")
+                    shutil.rmtree(root_node_modules)
+                    console.print("[yellow]🗑️  Removed root node_modules[/yellow]")
 
-                    root_lock = project_path / "package-lock.json"
-                    if root_lock.exists():
-                        root_lock.unlink()
-                        console.print("[yellow]🗑️  Removed root package-lock.json[/yellow]")
+                root_lock = project_path / "package-lock.json"
+                if root_lock.exists():
+                    root_lock.unlink()
+                    console.print("[yellow]🗑️  Removed root package-lock.json[/yellow]")
 
-                # Install root dependencies
-                progress.update(task, description="Installing root npm dependencies...")
-                try:
-                    if not nuke and (project_path / "package-lock.json").exists():
-                        run_cmd.run(
-                            ["npm", "ci"],
-                            cwd=project_path,
-                            description="Installing root npm dependencies",
-                        )
-                    else:
-                        run_cmd.run(
-                            ["npm", "install"],
-                            cwd=project_path,
-                            description="Installing root npm dependencies",
-                        )
-                except subprocess.CalledProcessError:
-                    # Fallback to npm install
-                    run_cmd.run(
-                        ["npm", "install"],
-                        cwd=project_path,
-                        description="Installing root npm dependencies (fallback)",
-                    )
-
-            # Frontend npm dependencies
+            # Frontend npm nuke preparation
             superset_frontend = project_path / "superset-frontend"
             frontend_node_modules = superset_frontend / "node_modules"
             frontend_package_json = superset_frontend / "package.json"
 
-            if frontend_package_json.exists():
-                if nuke:
-                    # Remove node_modules and package-lock.json
-                    if frontend_node_modules.exists():
-                        progress.update(task, description="Removing frontend node_modules...")
-                        import shutil
+            if frontend_package_json.exists() and nuke:
+                # Remove node_modules and package-lock.json
+                if frontend_node_modules.exists():
+                    progress.update(task, description="Removing frontend node_modules...")
+                    import shutil
 
-                        shutil.rmtree(frontend_node_modules)
-                        console.print("[yellow]🗑️  Removed frontend node_modules[/yellow]")
+                    shutil.rmtree(frontend_node_modules)
+                    console.print("[yellow]🗑️  Removed frontend node_modules[/yellow]")
 
-                    frontend_lock = superset_frontend / "package-lock.json"
-                    if frontend_lock.exists():
-                        frontend_lock.unlink()
-                        console.print("[yellow]🗑️  Removed frontend package-lock.json[/yellow]")
+                frontend_lock = superset_frontend / "package-lock.json"
+                if frontend_lock.exists():
+                    frontend_lock.unlink()
+                    console.print("[yellow]🗑️  Removed frontend package-lock.json[/yellow]")
 
-                # Install frontend dependencies
-                progress.update(task, description="Installing frontend npm dependencies...")
-                try:
-                    if not nuke and (superset_frontend / "package-lock.json").exists():
-                        run_cmd.run(
-                            ["npm", "ci"],
-                            cwd=superset_frontend,
-                            description="Installing frontend npm dependencies",
-                        )
-                    else:
-                        run_cmd.run(
-                            ["npm", "install"],
-                            cwd=superset_frontend,
-                            description="Installing frontend npm dependencies",
-                        )
-                except subprocess.CalledProcessError:
-                    # Fallback to npm install
+    # Temporarily exit Progress context for npm operations to avoid spinner conflicts
+    if not backend_only:
+        root_package_json = project_path / "package.json"
+        if root_package_json.exists():
+            # Install root dependencies
+            console.print("[dim]Installing root npm dependencies...[/dim]")
+            try:
+                if not nuke and (project_path / "package-lock.json").exists():
+                    run_cmd.run(
+                        ["npm", "ci"],
+                        cwd=project_path,
+                        description="Installing root npm dependencies",
+                    )
+                else:
+                    run_cmd.run(
+                        ["npm", "install"],
+                        cwd=project_path,
+                        description="Installing root npm dependencies",
+                    )
+            except subprocess.CalledProcessError:
+                # Fallback to npm install
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=project_path,
+                    description="Installing root npm dependencies (fallback)",
+                )
+
+        # Frontend npm dependencies
+        superset_frontend = project_path / "superset-frontend"
+        frontend_node_modules = superset_frontend / "node_modules"
+        frontend_package_json = superset_frontend / "package.json"
+
+        if frontend_package_json.exists():
+            # Install frontend dependencies
+            console.print("[dim]Installing frontend npm dependencies...[/dim]")
+            try:
+                if not nuke and (superset_frontend / "package-lock.json").exists():
+                    run_cmd.run(
+                        ["npm", "ci"],
+                        cwd=superset_frontend,
+                        description="Installing frontend npm dependencies",
+                    )
+                else:
                     run_cmd.run(
                         ["npm", "install"],
                         cwd=superset_frontend,
-                        description="Installing frontend npm dependencies (fallback)",
+                        description="Installing frontend npm dependencies",
                     )
+            except subprocess.CalledProcessError:
+                # Fallback to npm install
+                run_cmd.run(
+                    ["npm", "install"],
+                    cwd=superset_frontend,
+                    description="Installing frontend npm dependencies (fallback)",
+                )
 
-            console.print("[green]✅ Frontend dependencies resynced[/green]")
+        console.print("[green]✅ Frontend dependencies resynced[/green]")
 
     console.print(
         f"\n[bold green]🎉 Dependencies for '{project}' have been resynced successfully![/bold green]"
