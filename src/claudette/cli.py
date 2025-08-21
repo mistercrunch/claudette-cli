@@ -924,7 +924,9 @@ def list() -> None:
 
     # Find all projects with metadata files
     projects_found = False
+    project_rows = []  # Collect all project data for sorting
     projects_dir = settings.claudette_home / "projects"
+
     if projects_dir.exists():
         # Check old-style metadata files
         for metadata_file in projects_dir.glob("*.claudette"):
@@ -948,20 +950,24 @@ def list() -> None:
                 # Format PR display
                 pr_display = f"#{metadata.pr_number}" if metadata.pr_number else "?"
 
-                table.add_row(
-                    metadata.name,
-                    str(metadata.port),
-                    pr_display,
-                    description,
-                    status,
+                project_rows.append(
+                    (
+                        metadata.name,
+                        str(metadata.port),
+                        pr_display,
+                        description,
+                        status,
+                    )
                 )
             except Exception:
-                table.add_row(
-                    project_name,
-                    "?",
-                    "?",
-                    "[dim]Error loading[/dim]",
-                    "⚠️",
+                project_rows.append(
+                    (
+                        project_name,
+                        "?",
+                        "?",
+                        "[dim]Error loading[/dim]",
+                        "⚠️",
+                    )
                 )
 
         # Check new-style project folders
@@ -987,21 +993,31 @@ def list() -> None:
                     # Format PR display
                     pr_display = f"#{metadata.pr_number}" if metadata.pr_number else "?"
 
-                    table.add_row(
-                        metadata.name,
-                        str(metadata.port),
-                        pr_display,
-                        description,
-                        status,
+                    project_rows.append(
+                        (
+                            metadata.name,
+                            str(metadata.port),
+                            pr_display,
+                            description,
+                            status,
+                        )
                     )
                 except Exception:
-                    table.add_row(
-                        project_name,
-                        "?",
-                        "?",
-                        "[dim]Error loading[/dim]",
-                        "⚠️",
+                    project_rows.append(
+                        (
+                            project_name,
+                            "?",
+                            "?",
+                            "[dim]Error loading[/dim]",
+                            "⚠️",
+                        )
                     )
+
+    # Sort projects by name (first column) and add to table
+    if project_rows:
+        project_rows.sort(key=lambda row: row[0].lower())  # Sort by project name, case-insensitive
+        for row in project_rows:
+            table.add_row(*row)
 
     if projects_found:
         list_console.print(table)
