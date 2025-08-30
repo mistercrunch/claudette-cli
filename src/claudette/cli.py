@@ -94,8 +94,16 @@ settings = ClaudetteSettings()
 # Global command runner instance
 run_cmd = CommandRunner(console)
 
-# Current claudette schema version
-CLAUDETTE_VERSION = "0.2.0"
+
+def get_package_version() -> str:
+    """Get the current package version."""
+    from . import __version__
+
+    return __version__
+
+
+# Current claudette schema version (for migrations)
+CLAUDETTE_SCHEMA_VERSION = "0.2.0"
 
 
 def _write_version_file(version_file: Path, version: str) -> None:
@@ -193,7 +201,7 @@ def _ensure_claudette_initialized() -> None:
     if not version_file.exists():
         # Pre-0.2.0 installation detected - migrate silently
         _migrate_v01_to_v02()
-        _write_version_file(version_file, CLAUDETTE_VERSION)
+        _write_version_file(version_file, CLAUDETTE_SCHEMA_VERSION)
     else:
         # Check if we need to run any migrations
         try:
@@ -201,16 +209,23 @@ def _ensure_claudette_initialized() -> None:
             stored_version = version_data.get("version", "0.1.0")
 
             # Simple version comparison (works for x.y.z format)
-            if stored_version < CLAUDETTE_VERSION:
+            if stored_version < CLAUDETTE_SCHEMA_VERSION:
                 # Run migrations based on version
                 if stored_version < "0.2.0":
                     _migrate_v01_to_v02()
 
                 # Update version file after successful migration
-                _write_version_file(version_file, CLAUDETTE_VERSION)
+                _write_version_file(version_file, CLAUDETTE_SCHEMA_VERSION)
         except (json.JSONDecodeError, KeyError):
             # Invalid version file, recreate it
-            _write_version_file(version_file, CLAUDETTE_VERSION)
+            _write_version_file(version_file, CLAUDETTE_SCHEMA_VERSION)
+
+
+@app.command()
+def version() -> None:
+    """📋 Show claudette version."""
+    package_version = get_package_version()
+    console.print(package_version)
 
 
 @app.command()
@@ -1982,6 +1997,9 @@ def deps(
 
             if nuke and venv_path.exists():
                 progress.update(task, description="Removing Python virtual environment...")
+                console.print(
+                    "[dim]Removing Python virtual environment (this may take a moment)...[/dim]"
+                )
                 import shutil
 
                 shutil.rmtree(venv_path)
@@ -2072,6 +2090,9 @@ def deps(
                 # Remove node_modules and package-lock.json
                 if root_node_modules.exists():
                     progress.update(task, description="Removing root node_modules...")
+                    console.print(
+                        "[dim]Removing root node_modules (this may take a moment)...[/dim]"
+                    )
                     import shutil
 
                     shutil.rmtree(root_node_modules)
@@ -2091,6 +2112,9 @@ def deps(
                 # Remove node_modules and package-lock.json
                 if frontend_node_modules.exists():
                     progress.update(task, description="Removing frontend node_modules...")
+                    console.print(
+                        "[dim]Removing frontend node_modules (this may take a moment)...[/dim]"
+                    )
                     import shutil
 
                     shutil.rmtree(frontend_node_modules)
