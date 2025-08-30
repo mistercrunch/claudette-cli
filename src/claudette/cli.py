@@ -2145,6 +2145,22 @@ def deps(
                     description="Installing frontend npm dependencies (refresh)",
                 )
 
+            # Run npm prune in nuke mode to clean up package/plugin build artifacts
+            if nuke:
+                console.print(
+                    "[dim]Running npm prune to clean up package/plugin build artifacts and dependencies...[/dim]"
+                )
+                try:
+                    run_cmd.run(
+                        ["npm", "run", "prune"],
+                        cwd=superset_frontend,
+                        description="Cleaning up package/plugin build artifacts",
+                        check=False,  # Don't fail if prune command fails
+                    )
+                    console.print("[green]✅ Package/plugin cleanup completed[/green]")
+                except subprocess.CalledProcessError as e:
+                    console.print(f"[yellow]⚠️  npm run prune failed, but continuing: {e}[/yellow]")
+
         console.print("[green]✅ Frontend dependencies resynced[/green]")
 
     console.print(
