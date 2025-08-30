@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
@@ -45,7 +45,6 @@ dev = [
     "pre-commit>=3.0.0",
     "build>=1.0.0",
     "twine>=4.0.0",
-    "hatch-vcs>=0.3.0",
 ]
 
 [project.scripts]
@@ -125,7 +124,4 @@ exclude_lines = [
 ]
 
 [tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/claudette/_version.py"
+path = "src/claudette/__init__.py"
