@@ -2019,34 +2019,30 @@ def deps(
 
     # Temporarily exit Progress context for uv operations to avoid spinner conflicts
     if not frontend_only:
-        requirements_files = [
-            project_path / "requirements" / "development.txt",
-            project_path / "requirements.txt",
-        ]
-
-        for req_file in requirements_files:
-            if req_file.exists():
-                try:
-                    console.print(f"[dim]Installing from {req_file.name}...[/dim]")
-                    run_cmd.run(
-                        [
-                            "uv",
-                            "pip",
-                            "install",
-                            "-r",
-                            str(req_file),
-                            "--python",
-                            str(venv_path / "bin" / "python"),
-                        ],
-                        cwd=project_path,
-                        description=f"Installing from {req_file.name}",
-                    )
-                    break
-                except subprocess.CalledProcessError as e:
-                    console.print(
-                        f"[yellow]⚠️  Failed to install from {req_file.name}: {e}[/yellow]"
-                    )
-                    continue
+        # Install requirements/development.txt (standard for Superset)
+        dev_requirements = project_path / "requirements" / "development.txt"
+        if dev_requirements.exists():
+            try:
+                console.print(f"[dim]Installing from {dev_requirements.name}...[/dim]")
+                run_cmd.run(
+                    [
+                        "uv",
+                        "pip",
+                        "install",
+                        "-r",
+                        str(dev_requirements),
+                        "--python",
+                        str(venv_path / "bin" / "python"),
+                    ],
+                    cwd=project_path,
+                    description=f"Installing from {dev_requirements.name}",
+                )
+            except subprocess.CalledProcessError as e:
+                console.print(
+                    f"[yellow]⚠️  Failed to install from {dev_requirements.name}: {e}[/yellow]"
+                )
+        else:
+            console.print("[yellow]⚠️  No requirements/development.txt found[/yellow]")
 
         # Install editable package
         if (project_path / "setup.py").exists():
