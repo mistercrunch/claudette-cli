@@ -58,9 +58,12 @@ Issues = "https://github.com/yourusername/claudette/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claudette"]
-include = [
-    "src/claudette/templates/*",
-]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/claudette/templates/CLAUDE.local.md" = "claudette/templates/CLAUDE.local.md"
+"src/claudette/templates/claude_rc_central" = "claudette/templates/claude_rc_central"
+"src/claudette/templates/claude_rc_template" = "claudette/templates/claude_rc_template"
+"src/claudette/templates/gitignore_additions" = "claudette/templates/gitignore_additions"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -68,6 +71,12 @@ include = [
     "/README.md",
     "/LICENSE",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/claudette/templates/CLAUDE.local.md" = "src/claudette/templates/CLAUDE.local.md"
+"src/claudette/templates/claude_rc_central" = "src/claudette/templates/claude_rc_central"
+"src/claudette/templates/claude_rc_template" = "src/claudette/templates/claude_rc_template"
+"src/claudette/templates/gitignore_additions" = "src/claudette/templates/gitignore_additions"
 
 [tool.ruff]
 target-version = "py38"
@@ -121,6 +130,11 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
+]
+
+[dependency-groups]
+dev = [
+    "build>=1.2.2.post1",
 ]
 
 [tool.hatch.version]
