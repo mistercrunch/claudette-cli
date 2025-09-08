@@ -17,6 +17,35 @@ from rich.table import Table
 from .config import PROJECT_MANAGED_FILES, ClaudetteSettings, ProjectMetadata
 
 
+def get_user_shell() -> tuple[str, str]:
+    """Get user's preferred shell and its config file.
+    
+    Returns:
+        tuple: (shell_command, rc_file_path)
+    """
+    # Get shell from SHELL environment variable
+    shell_path = os.environ.get("SHELL", "/bin/bash")
+    shell_name = Path(shell_path).name
+    
+    if shell_name == "zsh":
+        return ("zsh", "~/.zshrc")
+    elif shell_name == "fish":
+        return ("fish", "~/.config/fish/config.fish") 
+    else:
+        # Default to bash for bash and unknown shells
+        return ("bash", "~/.bashrc")
+
+
+def get_shell_rcfile_arg(shell: str) -> str:
+    """Get the RC file argument for different shells."""
+    if shell == "zsh":
+        return "--rcs"  # zsh uses --rcs to source rc files
+    elif shell == "fish":
+        return ""  # fish doesn't use rc files the same way
+    else:
+        return "--rcfile"  # bash uses --rcfile
+
+
 def get_template_path(template_name: str) -> Path:
     """Get path to a template file."""
     return Path(__file__).parent / "templates" / template_name
@@ -722,10 +751,13 @@ cd superset-frontend && npm test
         console.print(f"\n[green]🚀 Activating project: {project}[/green]")
         console.print("[dim]Setting up project environment...[/dim]")
 
+        # Get user's preferred shell for activation
+        user_shell, user_rc = get_user_shell()
+        
         # Create activation script (same as in activate command)
         activate_script = f"""
-# Source user's bashrc first
-source ~/.bashrc 2>/dev/null || true
+# Source user's rc file first
+source {user_rc} 2>/dev/null || true
 
 # Set environment variables
 export NODE_PORT={metadata.port}
@@ -771,9 +803,15 @@ echo
             temp_script = f.name
 
         try:
-            # Start bash in the project directory with our activation script
+            # Start user's shell in the project directory with our activation script
+            shell_args = [user_shell]
+            if user_shell in ["bash", "zsh"]:
+                rcfile_arg = get_shell_rcfile_arg(user_shell)
+                if rcfile_arg:
+                    shell_args.extend([rcfile_arg, temp_script])
+            
             subprocess.run(
-                ["bash", "--rcfile", temp_script],
+                shell_args,
                 cwd=project_path,  # Start in project directory
                 check=False,
             )
@@ -1140,7 +1178,7 @@ def activate(
 ) -> None:
     """🚀 Activate a project: start a new shell session in the project directory with venv activated.
 
-    This command starts a new bash subprocess with:
+    This command starts a new shell subprocess with:
     - Working directory set to the project path
     - Python virtual environment activated
     - PROJECT and NODE_PORT environment variables set
@@ -1167,10 +1205,13 @@ def activate(
     console.print(f"[green]🚀 Activating project: {project}[/green]")
     console.print("[dim]Setting up project environment...[/dim]")
 
+    # Get user's preferred shell
+    user_shell, user_rc = get_user_shell()
+    
     # Create activation script (only modify PS1 if it exists and we're in bash/zsh)
     activate_script = f"""
-# Source user's bashrc first
-source ~/.bashrc 2>/dev/null || true
+# Source user's rc file first
+source {user_rc} 2>/dev/null || true
 
 # Set environment variables
 export NODE_PORT={metadata.port}
@@ -1212,9 +1253,15 @@ echo
         temp_script = f.name
 
     try:
-        # Start bash in the project directory with our activation script
+        # Start user's shell in the project directory with our activation script
+        shell_args = [user_shell]
+        if user_shell in ["bash", "zsh"]:
+            rcfile_arg = get_shell_rcfile_arg(user_shell)
+            if rcfile_arg:
+                shell_args.extend([rcfile_arg, temp_script])
+        
         subprocess.run(
-            ["bash", "--rcfile", temp_script],
+            shell_args,
             cwd=project_path,  # Start in project directory
             check=False,
         )
@@ -1330,7 +1377,11 @@ def shell(
             "superset-light",
         ] + command_args
     else:
-        # Interactive shell mode
+        # Interactive shell mode - use user's preferred shell if available in container
+        user_shell, _ = get_user_shell()
+        # Try to use user's shell, but fall back to bash if not available in container
+        container_shell = f"/bin/{user_shell}" if user_shell in ["bash", "zsh", "sh"] else "/bin/bash"
+        
         exec_cmd = [
             "docker-compose",
             "-p",
@@ -1339,7 +1390,7 @@ def shell(
             "docker-compose-light.yml",
             "exec",
             "superset-light",
-            "/bin/bash",
+            container_shell,
         ]
 
     env = {**os.environ, "NODE_PORT": str(metadata.port)}
