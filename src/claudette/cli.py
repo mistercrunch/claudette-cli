@@ -39,7 +39,8 @@ def get_user_shell() -> tuple[str, str]:
 def get_shell_rcfile_arg(shell: str) -> str:
     """Get the RC file argument for different shells."""
     if shell == "zsh":
-        return "--rcs"  # zsh uses --rcs to source rc files
+        # zsh doesn't have --rcfile equivalent, we'll handle it differently
+        return ""
     elif shell == "fish":
         return ""  # fish doesn't use rc files the same way
     else:
@@ -804,17 +805,45 @@ echo
 
         try:
             # Start user's shell in the project directory with our activation script
-            shell_args = [user_shell]
-            if user_shell in ["bash", "zsh"]:
-                rcfile_arg = get_shell_rcfile_arg(user_shell)
-                if rcfile_arg:
-                    shell_args.extend([rcfile_arg, temp_script])
-            
-            subprocess.run(
-                shell_args,
-                cwd=project_path,  # Start in project directory
-                check=False,
-            )
+            if user_shell == "zsh":
+                # For zsh, create a wrapper script that sources both user config and our setup
+                wrapper_script = f"""#!/bin/zsh
+# Source user's zsh config first
+source ~/.zshrc 2>/dev/null || true
+
+# Then source our project activation
+source {temp_script}
+
+# Start interactive zsh
+exec zsh -i
+"""
+                temp_wrapper = temp_script + "_wrapper.zsh"
+                with Path(temp_wrapper).open('w') as f:
+                    f.write(wrapper_script)
+                
+                subprocess.run(
+                    [user_shell, temp_wrapper],
+                    cwd=project_path,
+                    check=False,
+                )
+                
+                # Clean up wrapper script
+                Path(temp_wrapper).unlink(missing_ok=True)
+                
+            elif user_shell == "bash":
+                # For bash, use --rcfile
+                subprocess.run(
+                    ["bash", "--rcfile", temp_script],
+                    cwd=project_path,
+                    check=False,
+                )
+            else:
+                # For other shells, just run them normally
+                subprocess.run(
+                    [user_shell],
+                    cwd=project_path,
+                    check=False,
+                )
         finally:
             # Clean up temp file
             Path(temp_script).unlink(missing_ok=True)
@@ -1254,17 +1283,45 @@ echo
 
     try:
         # Start user's shell in the project directory with our activation script
-        shell_args = [user_shell]
-        if user_shell in ["bash", "zsh"]:
-            rcfile_arg = get_shell_rcfile_arg(user_shell)
-            if rcfile_arg:
-                shell_args.extend([rcfile_arg, temp_script])
-        
-        subprocess.run(
-            shell_args,
-            cwd=project_path,  # Start in project directory
-            check=False,
-        )
+        if user_shell == "zsh":
+            # For zsh, create a wrapper script that sources both user config and our setup
+            wrapper_script = f"""#!/bin/zsh
+# Source user's zsh config first
+source ~/.zshrc 2>/dev/null || true
+
+# Then source our project activation
+source {temp_script}
+
+# Start interactive zsh
+exec zsh -i
+"""
+            temp_wrapper = temp_script + "_wrapper.zsh"
+            with Path(temp_wrapper).open('w') as f:
+                f.write(wrapper_script)
+            
+            subprocess.run(
+                [user_shell, temp_wrapper],
+                cwd=project_path,
+                check=False,
+            )
+            
+            # Clean up wrapper script
+            Path(temp_wrapper).unlink(missing_ok=True)
+            
+        elif user_shell == "bash":
+            # For bash, use --rcfile
+            subprocess.run(
+                ["bash", "--rcfile", temp_script],
+                cwd=project_path,
+                check=False,
+            )
+        else:
+            # For other shells, just run them normally
+            subprocess.run(
+                [user_shell],
+                cwd=project_path,
+                check=False,
+            )
     finally:
         # Clean up temp file
         Path(temp_script).unlink(missing_ok=True)
