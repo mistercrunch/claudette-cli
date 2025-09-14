@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -3442,6 +3443,351 @@ def sync(
     else:
         console.print(f"[yellow]No PROJECT.md found for {project}[/yellow]")
         console.print(f"[dim]Expected at: {project_path / 'PROJECT.md'}[/dim]")
+
+
+@app.command()
+def clean(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be cleaned without doing it"),
+    force: bool = typer.Option(False, "--force", "-f", help="Clean without confirmation"),
+) -> None:
+    """🧹 Clean up orphaned project metadata and fix inconsistencies."""
+    console.print("\n[bold blue]🧹 Claudette Clean - Removing Orphaned Projects[/bold blue]\n")
+    
+    metadata_dir = settings.claudette_home / "projects"
+    if not metadata_dir.exists():
+        console.print("[yellow]No projects directory found. Nothing to clean.[/yellow]")
+        raise typer.Exit(0)
+    
+    # Find orphaned projects
+    orphaned = []
+    metadata_files = [f for f in metadata_dir.glob("*.claudette")]
+    
+    if not metadata_files:
+        console.print("[green]No projects found. Nothing to clean.[/green]")
+        raise typer.Exit(0)
+    
+    console.print("Scanning for orphaned projects...\n")
+    
+    for metadata_file in metadata_files:
+        project_name = metadata_file.stem
+        project_path = settings.worktree_base / project_name
+        
+        try:
+            metadata = ProjectMetadata.from_file(metadata_file)
+            
+            # Check if project directory exists and is a valid worktree
+            if not project_path.exists():
+                orphaned.append((project_name, metadata_file, "Worktree directory missing"))
+            elif not (project_path / ".git").exists():
+                orphaned.append((project_name, metadata_file, "Not a valid git worktree"))
+            else:
+                # Check if it's actually a worktree (not just a regular git repo)
+                try:
+                    result = subprocess.run(
+                        ["git", "worktree", "list"],
+                        cwd=settings.superset_base,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if result.returncode == 0:
+                        # Check if this project is in the worktree list
+                        if str(project_path) not in result.stdout:
+                            orphaned.append((project_name, metadata_file, "Not in git worktree list"))
+                except Exception:
+                    pass  # If we can't check, assume it's okay
+                    
+        except Exception as e:
+            orphaned.append((project_name, metadata_file, f"Corrupted metadata: {str(e)}"))
+    
+    if not orphaned:
+        console.print("[green]✅ No orphaned projects found. Everything is clean![/green]")
+        raise typer.Exit(0)
+    
+    # Display orphaned projects
+    console.print(f"[yellow]Found {len(orphaned)} orphaned project(s):[/yellow]\n")
+    for name, file, reason in orphaned:
+        console.print(f"  • [red]{name}[/red]: {reason}")
+    
+    if dry_run:
+        console.print("\n[dim]Dry run mode - no changes will be made[/dim]")
+        console.print("\nWould remove:")
+        for name, file, _ in orphaned:
+            console.print(f"  • {file}")
+        raise typer.Exit(0)
+    
+    # Confirm deletion
+    if not force:
+        console.print("\n[yellow]This will remove metadata for the orphaned projects above.[/yellow]")
+        console.print("[dim]Note: This only removes metadata files, not any actual project files.[/dim]")
+        confirm = typer.confirm("\nProceed with cleanup?", default=False)
+        if not confirm:
+            console.print("[yellow]Cleanup cancelled.[/yellow]")
+            raise typer.Exit(0)
+    
+    # Perform cleanup
+    console.print("\n[cyan]Cleaning up orphaned projects...[/cyan]")
+    cleaned = 0
+    errors = []
+    
+    for name, file, reason in orphaned:
+        try:
+            file.unlink()
+            console.print(f"  [green]✓[/green] Removed metadata for '{name}'")
+            cleaned += 1
+        except Exception as e:
+            console.print(f"  [red]✗[/red] Failed to remove '{name}': {e}")
+            errors.append((name, str(e)))
+    
+    # Summary
+    console.print("\n" + "─" * 50 + "\n")
+    if cleaned > 0:
+        console.print(f"[green]✅ Successfully cleaned {cleaned} orphaned project(s)[/green]")
+    
+    if errors:
+        console.print(f"\n[red]❌ Failed to clean {len(errors)} project(s):[/red]")
+        for name, error in errors:
+            console.print(f"  • {name}: {error}")
+    
+    console.print("\n[dim]Run [cyan]claudette doctor[/cyan] to verify the cleanup.[/dim]")
+
+
+@app.command()
+def doctor() -> None:
+    """🩺 Diagnose claudette environment and check for issues."""
+    console.print("\n[bold blue]🩺 Claudette Doctor - Environment Health Check[/bold blue]\n")
+    
+    issues = []
+    warnings = []
+    
+    # Check 1: Claudette initialized
+    console.print("Checking claudette initialization... ", end="")
+    if not settings.claudette_home.exists():
+        console.print("[red]✗[/red]")
+        issues.append("Claudette not initialized. Run: claudette init")
+    else:
+        console.print("[green]✓[/green]")
+        
+    # Check 2: Superset base repository
+    console.print("Checking Superset base repository... ", end="")
+    if not settings.superset_base.exists():
+        console.print("[red]✗[/red]")
+        issues.append("Superset base repository not found. Run: claudette init")
+    else:
+        console.print("[green]✓[/green]")
+        # Check if it's a git repo
+        if not (settings.superset_base / ".git").exists():
+            issues.append("Superset base is not a git repository")
+    
+    # Check 3: Worktree directory
+    console.print("Checking worktree directory... ", end="")
+    if not settings.worktree_base.exists():
+        console.print("[red]✗[/red]")
+        issues.append(f"Worktree directory not found: {settings.worktree_base}")
+    else:
+        console.print("[green]✓[/green]")
+        
+    # Check 4: Docker installation
+    console.print("Checking Docker installation... ", end="")
+    try:
+        result = subprocess.run(
+            ["docker", "--version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            console.print("[red]✗[/red]")
+            issues.append("Docker not installed or not accessible")
+        else:
+            console.print("[green]✓[/green]")
+            # Check Docker daemon
+            console.print("Checking Docker daemon... ", end="")
+            result = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode != 0:
+                console.print("[red]✗[/red]")
+                issues.append("Docker daemon not running. Start Docker Desktop or docker service")
+            else:
+                console.print("[green]✓[/green]")
+    except FileNotFoundError:
+        console.print("[red]✗[/red]")
+        issues.append("Docker command not found. Install Docker")
+    
+    # Check 5: Git installation
+    console.print("Checking Git installation... ", end="")
+    try:
+        result = subprocess.run(
+            ["git", "--version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            console.print("[red]✗[/red]")
+            issues.append("Git not installed or not accessible")
+        else:
+            console.print("[green]✓[/green]")
+    except FileNotFoundError:
+        console.print("[red]✗[/red]")
+        issues.append("Git command not found. Install Git")
+    
+    # Check 6: Node.js installation
+    console.print("Checking Node.js installation... ", end="")
+    try:
+        result = subprocess.run(
+            ["node", "--version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            console.print("[red]✗[/red]")
+            issues.append("Node.js not installed or not accessible")
+        else:
+            version = result.stdout.strip()
+            console.print(f"[green]✓[/green] ({version})")
+            # Check version requirement
+            import re
+            match = re.match(r"v(\d+)", version)
+            if match:
+                major_version = int(match.group(1))
+                if major_version < 18:
+                    warnings.append(f"Node.js version {version} is outdated. Recommend v18+")
+    except FileNotFoundError:
+        console.print("[red]✗[/red]")
+        issues.append("Node.js not found. Install Node.js v18+")
+    
+    # Check 7: Python version
+    console.print("Checking Python version... ", end="")
+    import sys
+    py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if sys.version_info < (3, 9):
+        console.print(f"[yellow]⚠[/yellow] ({py_version})")
+        warnings.append(f"Python {py_version} may have compatibility issues. Recommend Python 3.9+")
+    else:
+        console.print(f"[green]✓[/green] ({py_version})")
+    
+    # Check 8: UV installation
+    console.print("Checking uv installation... ", end="")
+    try:
+        result = subprocess.run(
+            ["uv", "--version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            console.print("[yellow]⚠[/yellow]")
+            warnings.append("uv not installed. Install with: pip install uv")
+        else:
+            console.print("[green]✓[/green]")
+    except FileNotFoundError:
+        console.print("[yellow]⚠[/yellow]")
+        warnings.append("uv not found. Performance may be slower. Install with: pip install uv")
+    
+    # Check 9: Check for active projects
+    console.print("\nScanning for projects... ", end="")
+    metadata_dir = settings.claudette_home / "projects"
+    project_count = 0
+    metadata_files = []
+    if metadata_dir.exists():
+        metadata_files = [f for f in metadata_dir.glob("*.claudette")]
+        project_count = len(metadata_files)
+        
+        if project_count > 0:
+            console.print(f"[cyan]{project_count} project(s) found[/cyan]")
+            
+            # Check each project's health
+            orphaned_projects = []
+            for metadata_file in metadata_files:
+                project_name = metadata_file.stem
+                try:
+                    metadata = ProjectMetadata.from_file(metadata_file)
+                    project_path = settings.worktree_base / project_name
+                    
+                    # Quick health checks
+                    project_issues = []
+                    if not project_path.exists():
+                        project_issues.append("directory missing")
+                        orphaned_projects.append(project_name)
+                        issues.append(f"Orphaned project '{project_name}': worktree directory missing")
+                    elif not (project_path / ".git").exists():
+                        project_issues.append("not a git worktree")
+                        orphaned_projects.append(project_name)
+                        issues.append(f"Orphaned project '{project_name}': not a valid git worktree")
+                    
+                    if metadata.frozen:
+                        project_issues.append("frozen")
+                    
+                    if project_issues:
+                        console.print(f"  • {project_name}: [yellow]{', '.join(project_issues)}[/yellow]")
+                    
+                except Exception as e:
+                    console.print(f"  • {project_name}: [red]metadata corrupted[/red]")
+                    orphaned_projects.append(project_name)
+                    issues.append(f"Orphaned project '{project_name}': metadata file corrupted")
+        else:
+            console.print("[dim]no projects[/dim]")
+    else:
+        console.print("[dim]no projects[/dim]")
+    
+    # Check 10: Port conflicts
+    if project_count > 0:
+        console.print("\nChecking for port conflicts... ", end="")
+        used_ports = {}
+        for metadata_file in metadata_dir.glob("*.claudette"):
+            try:
+                metadata = ProjectMetadata.from_file(metadata_file)
+                if metadata.port in used_ports:
+                    issues.append(
+                        f"Port {metadata.port} conflict: {metadata_file.stem} and {used_ports[metadata.port]}"
+                    )
+                used_ports[metadata.port] = metadata_file.stem
+            except Exception:
+                pass
+        if not any("Port" in issue for issue in issues):
+            console.print("[green]✓[/green]")
+        else:
+            console.print("[red]✗[/red]")
+    
+    # Report results
+    console.print("\n" + "─" * 50 + "\n")
+    
+    if not issues and not warnings:
+        console.print("[bold green]✅ All checks passed! Claudette is healthy.[/bold green]")
+    else:
+        if issues:
+            console.print(f"[bold red]❌ Found {len(issues)} issue(s):[/bold red]\n")
+            for issue in issues:
+                console.print(f"  • {issue}")
+        
+        if warnings:
+            if issues:
+                console.print()
+            console.print(f"[bold yellow]⚠️  {len(warnings)} warning(s):[/bold yellow]\n")
+            for warning in warnings:
+                console.print(f"  • {warning}")
+        
+        console.print("\n[dim]Fix the issues above for optimal claudette experience.[/dim]")
+    
+    # Show quick tips
+    if not issues:
+        console.print("\n[dim]Quick commands:[/dim]")
+        if project_count == 0:
+            console.print("  • [cyan]claudette add my-feature[/cyan] - Create your first project")
+        else:
+            console.print("  • [cyan]claudette list[/cyan] - View all projects")
+            console.print("  • [cyan]claudette status[/cyan] - Check project status")
+    else:
+        # Check if we have orphaned projects
+        if any("Orphaned project" in issue for issue in issues):
+            console.print("\n[bold yellow]⚠️  Orphaned projects detected![/bold yellow]")
+            console.print("Run [cyan]claudette clean[/cyan] to remove orphaned project metadata")
 
 
 @app.command()
