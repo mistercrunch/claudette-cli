@@ -3445,6 +3445,160 @@ def sync(
 
 
 @app.command()
+def launch(
+    project: str = typer.Argument(..., help="Project name to launch"),
+    port: Optional[int] = typer.Argument(
+        None, min=9000, max=9999, help="Port for frontend (auto-assigned if not provided)"
+    ),
+) -> None:
+    """🚀 Launch complete dev environment in iTerm with multiple tabs."""
+    console.print(f"\n[bold blue]🚀 Launching development environment for {project}[/bold blue]\n")
+    
+    # Check if iTerm2 is available
+    try:
+        import iterm2
+    except ImportError:
+        console.print("[red]❌ iTerm2 Python API not installed![/red]")
+        console.print("\nTo install it, run:")
+        console.print("[cyan]pip install iterm2[/cyan]")
+        console.print("\nAlso make sure iTerm2 is installed and Python API is enabled:")
+        console.print("1. Open iTerm2 Preferences")
+        console.print("2. Go to General → Magic")
+        console.print("3. Enable 'Enable Python API'")
+        raise typer.Exit(1)
+    
+    # Check if project exists
+    metadata_dir = settings.claudette_home / "projects"
+    project_exists = False
+    existing_port = None
+    
+    if metadata_dir.exists():
+        # Check for existing project
+        metadata_file = metadata_dir / f"{project}.claudette"
+        project_folder = metadata_dir / project
+        
+        if metadata_file.exists() or (project_folder.exists() and (project_folder / ".claudette").exists()):
+            try:
+                metadata = ProjectMetadata.load(project, settings.claudette_home)
+                project_exists = True
+                existing_port = metadata.port
+                console.print(f"[green]✓[/green] Project '{project}' already exists (port: {existing_port})")
+            except Exception:
+                pass
+    
+    # If project doesn't exist, create it
+    if not project_exists:
+        console.print(f"[yellow]Project '{project}' not found. Creating it now...[/yellow]")
+        
+        # Determine port
+        if port is None:
+            port = ProjectMetadata.suggest_port(settings.claudette_home)
+            console.print(f"[cyan]Auto-assigned port: {port}[/cyan]")
+        
+        # Create the project using the add command logic
+        # We'll call the add command programmatically
+        from typer.testing import CliRunner
+        runner = CliRunner()
+        result = runner.invoke(app, ["add", project, str(port)])
+        
+        if result.exit_code != 0:
+            console.print(f"[red]Failed to create project: {result.stdout}[/red]")
+            raise typer.Exit(1)
+        
+        console.print(f"[green]✓[/green] Project '{project}' created successfully")
+    else:
+        port = existing_port
+    
+    # Now launch iTerm with the project
+    import sys
+    import tempfile
+    import textwrap
+    
+    # Create a Python script to run the iTerm automation
+    iterm_script = textwrap.dedent(f'''
+        #!/usr/bin/env python3
+        import iterm2
+        import asyncio
+        
+        async def main(connection):
+            app = await iterm2.async_get_app(connection)
+            
+            # Create a new window
+            window = await iterm2.Window.async_create(connection)
+            
+            # Get the first tab that's created by default
+            tab1 = window.current_tab
+            session1 = tab1.current_session
+            
+            # Tab 1: Basic shell with project activated
+            await session1.async_send_text("cd {settings.worktree_base / project}\\n")
+            await session1.async_send_text("claudette activate {project}\\n")
+            await tab1.async_set_title("Shell")
+            
+            # Tab 2: Docker
+            tab2 = await window.async_create_tab()
+            session2 = tab2.current_session
+            await session2.async_send_text("cd {settings.worktree_base / project}\\n")
+            await session2.async_send_text("claudette activate {project}\\n")
+            await session2.async_send_text("claudette docker up\\n")
+            await tab2.async_set_title("Docker")
+            
+            # Tab 3: Claude Code
+            tab3 = await window.async_create_tab()
+            session3 = tab3.current_session
+            await session3.async_send_text("cd {settings.worktree_base / project}\\n")
+            await session3.async_send_text("claudette activate {project}\\n")
+            await session3.async_send_text("claudette claude code\\n")
+            await tab3.async_set_title("Claude Code")
+            
+            # Set window title
+            await window.async_set_title("Claudette: {project}")
+        
+        iterm2.run_until_complete(main)
+    ''')
+    
+    # Write script to temp file and execute it
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(iterm_script)
+        script_path = f.name
+    
+    try:
+        # Run the script using the current Python interpreter
+        result = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            console.print(f"\n[green]✅ iTerm environment launched successfully![/green]")
+            console.print(f"\n[bold]Tabs created:[/bold]")
+            console.print(f"  1. [cyan]Shell[/cyan] - Project shell with venv activated")
+            console.print(f"  2. [cyan]Docker[/cyan] - Running docker-compose up")
+            console.print(f"  3. [cyan]Claude Code[/cyan] - Claude Code AI assistant")
+            console.print(f"\n[dim]Frontend will be available at: http://localhost:{port}[/dim]")
+        else:
+            console.print(f"[red]Error launching iTerm: {result.stderr}[/red]")
+            console.print("\n[yellow]Troubleshooting:[/yellow]")
+            console.print("1. Make sure iTerm2 is running")
+            console.print("2. Check that Python API is enabled in iTerm2 preferences")
+            console.print("   (Preferences → General → Magic → Enable Python API)")
+            console.print("3. Try running: pip install --upgrade iterm2")
+            
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]iTerm launch script timed out - windows may still be opening[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Failed to launch iTerm: {e}[/red]")
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(script_path)
+        except:
+            pass
+
+
+@app.command()
 def nuke() -> None:
     """🚨 COMPLETELY REMOVE claudette and all projects (DANGEROUS!)"""
     console.print("\n[bold red]🚨 NUCLEAR OPTION - COMPLETE CLAUDETTE REMOVAL 🚨[/bold red]\n")

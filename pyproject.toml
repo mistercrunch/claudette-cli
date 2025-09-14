@@ -46,6 +46,9 @@ dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
 ]
+iterm = [
+    "iterm2>=2.7",
+]
 
 [project.scripts]
 claudette = "claudette.cli:app"
