@@ -136,6 +136,39 @@ def get_package_version() -> str:
 CLAUDETTE_SCHEMA_VERSION = "0.2.0"
 
 
+def _resolve_project_path(project_name: str) -> Path:
+    """Resolve project path from metadata (works for both native & adopted projects).
+
+    This is the single source of truth for project paths. Always use this instead
+    of calculating worktree_base / project_name directly.
+
+    Returns:
+        Path to the project (may be in worktree_base for native, or external for adopted)
+
+    Raises:
+        typer.Exit: If project metadata cannot be found
+    """
+    try:
+        metadata = ProjectMetadata.load(project_name, settings.claudette_home)
+        return metadata.path
+    except FileNotFoundError:
+        # Fallback for backward compatibility or fuzzy matching
+        fallback_path = settings.worktree_base / project_name
+        if fallback_path.exists():
+            return fallback_path
+
+        # Try fuzzy matching
+        possible_paths = [p for p in settings.worktree_base.glob(f"{project_name}*")]
+        if len(possible_paths) == 1:
+            console.print(
+                f"[yellow]⚠️  Found '{possible_paths[0].name}' - treating as '{project_name}'[/yellow]"
+            )
+            return possible_paths[0]
+
+        console.print(f"[red]❌ Project '{project_name}' not found[/red]")
+        raise typer.Exit(1) from None
+
+
 def _write_version_file(version_file: Path, version: str) -> None:
     """Write version file with current version and timestamp."""
     version_data = {
@@ -873,12 +906,236 @@ exec zsh -i
 
 
 @app.command()
+def adopt(
+    path: Path = typer.Argument(
+        Path("."), help="Path to existing Superset worktree (defaults to current directory)"
+    ),
+    port: Optional[int] = typer.Option(
+        None, "--port", "-p", help="Port for frontend (auto-assigned if not provided)"
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Project name (uses directory name if not provided)"
+    ),
+) -> None:
+    """🔗 Adopt an existing Superset worktree into claudette management.
+
+    This allows you to manage a Superset worktree created by other tools or manually.
+    Claudette will set up dependencies and metadata but won't modify the git worktree itself.
+
+    Example:
+        cd ~/my-superset-worktree
+        clo adopt .                    # Adopt current directory
+        clo adopt /path/to/worktree    # Adopt specific path
+        clo adopt . --port 9005 --name my-feature
+    """
+    console.print("\n[bold green]🔗 Adopting existing Superset worktree[/bold green]\n")
+
+    # Resolve and validate path
+    abs_path = path.resolve()
+    if not abs_path.exists():
+        console.print(f"[red]❌ Path does not exist: {abs_path}[/red]")
+        raise typer.Exit(1)
+
+    if not abs_path.is_dir():
+        console.print(f"[red]❌ Path is not a directory: {abs_path}[/red]")
+        raise typer.Exit(1)
+
+    # Validate it's a Superset repository
+    console.print(f"[dim]Validating Superset repository at {abs_path}...[/dim]")
+    superset_markers = [
+        abs_path / "superset-frontend",
+        abs_path / "superset",
+        abs_path / "setup.py",
+    ]
+
+    if not all(marker.exists() for marker in superset_markers):
+        console.print("[red]❌ This doesn't appear to be a Superset repository![/red]")
+        console.print("[dim]Expected to find: superset-frontend/, superset/, setup.py[/dim]")
+        raise typer.Exit(1)
+
+    console.print("[green]✓[/green] Valid Superset repository detected")
+
+    # Determine project name
+    project_name = name or abs_path.name
+    console.print(f"[dim]Project name: {project_name}[/dim]")
+
+    # Check if project name is already in use
+    try:
+        existing_metadata = ProjectMetadata.load(project_name, settings.claudette_home)
+
+        # Idempotent behavior: if adopting the same path with the same settings, succeed
+        if existing_metadata.path.resolve() == abs_path:
+            # Same path - check if port matches (if specified)
+            if port is not None and existing_metadata.port != port:
+                console.print(
+                    f"[red]❌ Project '{project_name}' already exists at this path with a different port![/red]"
+                )
+                console.print(
+                    f"[dim]Existing port: {existing_metadata.port}, Requested port: {port}[/dim]"
+                )
+                console.print(
+                    "[yellow]💡 Remove the --port flag to keep the existing port, or use a different project name[/yellow]"
+                )
+                raise typer.Exit(1)
+
+            # Same path, same port (or no port specified) - idempotent success
+            console.print(
+                f"[green]✓ Project '{project_name}' is already adopted at this path[/green]"
+            )
+            console.print(f"[dim]Path: {abs_path}[/dim]")
+            console.print(f"[dim]Port: {existing_metadata.port}[/dim]")
+            console.print("[dim]No changes needed - project already managed by claudette[/dim]")
+            raise typer.Exit(0)
+        else:
+            # Different path - conflict
+            console.print(
+                f"[red]❌ Project '{project_name}' already exists at a different path![/red]"
+            )
+            console.print(f"[dim]Existing path: {existing_metadata.path}[/dim]")
+            console.print(f"[dim]Requested path: {abs_path}[/dim]")
+            console.print("[yellow]💡 Use --name to specify a different project name[/yellow]")
+            raise typer.Exit(1)
+    except FileNotFoundError:
+        pass  # Good, name is available
+
+    # Auto-assign or validate port
+    if port is None:
+        port = ProjectMetadata.suggest_port(settings.claudette_home)
+        console.print(f"[green]✓[/green] Auto-assigned port: {port}")
+    else:
+        # Check for port collisions
+        used_ports = ProjectMetadata.get_used_ports(settings.claudette_home)
+        if port in used_ports:
+            console.print(f"[red]❌ Port {port} is already in use by another project![/red]")
+            suggested_port = ProjectMetadata.suggest_port(settings.claudette_home)
+            console.print(f"[yellow]💡 Suggested port: {suggested_port}[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]✓[/green] Using port: {port}")
+
+    # Create metadata with adopted=True
+    metadata = ProjectMetadata(
+        name=project_name,
+        port=port,
+        path=abs_path,
+        adopted=True,
+    )
+
+    # Try to extract description from existing PROJECT.md
+    metadata.update_from_project_md()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        # Step 1: Save metadata
+        task = progress.add_task("Saving project metadata...", total=None)
+        metadata.save(settings.claudette_home)
+
+        # Step 2: Create Python venv
+        progress.update(task, description="Creating Python virtual environment...")
+        run_cmd.run(
+            ["uv", "venv", "-p", settings.python_version],
+            cwd=abs_path,
+            description="Creating Python virtual environment",
+        )
+
+        # Step 3: Install Python dependencies
+        progress.update(
+            task, description="Installing Python dependencies (this may take a while)..."
+        )
+
+    # Temporarily exit Progress context for uv operations
+    console.print("[dim]Installing Python development dependencies...[/dim]")
+    run_cmd.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "-r",
+            "requirements/development.txt",
+            "--python",
+            str(abs_path / ".venv" / "bin" / "python"),
+        ],
+        cwd=abs_path,
+        description="Installing Python development dependencies",
+    )
+
+    console.print("[dim]Installing Superset in editable mode...[/dim]")
+    run_cmd.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "-e",
+            ".",
+            "--python",
+            str(abs_path / ".venv" / "bin" / "python"),
+        ],
+        cwd=abs_path,
+        description="Installing Superset in editable mode",
+    )
+
+    # Continue with remaining setup
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Setting up environment...", total=None)
+
+        # Step 4: Symlink CLAUDE.local.md if it exists
+        if settings.claude_local_md and settings.claude_local_md.exists():
+            progress.update(task, description="Symlinking CLAUDE.local.md...")
+            claude_local_link = abs_path / "CLAUDE.local.md"
+            if not claude_local_link.exists():
+                claude_local_link.symlink_to(settings.claude_local_md)
+
+        # Step 5: npm install
+        progress.update(task, description="Installing npm dependencies...")
+        run_cmd.run(
+            ["npm", "ci"],
+            cwd=abs_path / "superset-frontend",
+            description="Installing npm dependencies",
+        )
+
+        # Step 6: Setup pre-commit hooks
+        progress.update(task, description="Setting up pre-commit hooks...")
+        venv_python = abs_path / ".venv" / "bin" / "python"
+        run_cmd.run(
+            [str(venv_python), "-m", "pre_commit", "install"],
+            cwd=abs_path,
+            description="Installing pre-commit hooks",
+        )
+
+    # Success!
+    console.print(f"\n[bold green]✅ Successfully adopted worktree: {project_name}[/bold green]")
+    console.print(f"[dim]Path: {abs_path}[/dim]")
+    console.print(f"[dim]Port: {port}[/dim]")
+    console.print(
+        "\n[yellow]💡 This is an adopted project. Use 'clo disown' to remove management while keeping the worktree.[/yellow]"
+    )
+
+    # Show next steps
+    console.print("\n[bold]Next steps:[/bold]")
+    console.print(f"  clo activate {project_name}")
+    console.print("  clo docker up -d")
+    console.print("  clo open")
+
+
+@app.command()
 def remove(
     project: str = typer.Argument(..., help="Project name to remove"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     keep_docs: bool = typer.Option(False, "--keep-docs", help="Keep PROJECT.md and project folder"),
+    delete_worktree: bool = typer.Option(
+        False, "--delete-worktree", help="For adopted projects: also delete the worktree"
+    ),
 ) -> None:
     """🗑️  Remove a worktree project and clean up resources.
+
+    For native claudette projects: Removes everything including the worktree.
+    For adopted projects: By default only removes claudette management (use --delete-worktree to also delete).
 
     By default, removes everything including PROJECT.md documentation.
     Use --keep-docs to preserve PROJECT.md for future use.
@@ -896,24 +1153,88 @@ def remove(
         if not project_path.exists():
             # Check for variations (like rison-old, rison-backup, etc)
             possible_paths = [p for p in settings.worktree_base.glob(f"{project}*")]
-            if possible_paths:
-                console.print("[yellow]Found related directories:[/yellow]")
-                for p in possible_paths:
-                    console.print(f"  • {p.name}")
-
-                if len(possible_paths) == 1:
-                    # If there's exactly one match, offer to remove it
-                    project_path = possible_paths[0]
-                    console.print(
-                        f"\n[yellow]Found '{project_path.name}' - treating as '{project}'[/yellow]"
-                    )
-                else:
-                    console.print(f"\n[yellow]Multiple matches found for '{project}'[/yellow]")
-                    console.print("[dim]You may need to manually clean up these directories.[/dim]")
-                    raise typer.Exit(1) from None
-            else:
+            if not possible_paths:
                 console.print(f"[red]Project '{project}' not found[/red]")
                 raise typer.Exit(1) from None
+
+            console.print("[yellow]Found related directories:[/yellow]")
+            for p in possible_paths:
+                console.print(f"  • {p.name}")
+
+            if len(possible_paths) == 1:
+                # If there's exactly one match, offer to remove it
+                project_path = possible_paths[0]
+                console.print(
+                    f"\n[yellow]Found '{project_path.name}' - treating as '{project}'[/yellow]"
+                )
+            else:
+                console.print(f"\n[yellow]Multiple matches found for '{project}'[/yellow]")
+                console.print("[dim]You may need to manually clean up these directories.[/dim]")
+                raise typer.Exit(1) from None
+
+    # Handle adopted projects differently
+    if metadata and metadata.adopted and not delete_worktree:
+        console.print(f"\n[cyan]ℹ️  '{project}' is an adopted project[/cyan]")
+        console.print(
+            "[yellow]By default, 'remove' only removes claudette management for adopted projects.[/yellow]"
+        )
+        console.print("[dim]The worktree will remain intact.[/dim]\n")
+        console.print("[bold]Options:[/bold]")
+        console.print("  1. Remove management only (recommended)")
+        console.print("  2. Remove management AND delete worktree (use --delete-worktree)")
+        console.print(
+            "\n[dim]Hint: Use 'clo disown' for more control over what gets removed.[/dim]"
+        )
+
+        if not force and not typer.confirm("\nRemove claudette management only (keep worktree)?"):
+            console.print("[yellow]Cancelled[/yellow]")
+            raise typer.Exit(0)
+
+        # Call disown logic for adopted projects
+        console.print(f"\n[yellow]Removing claudette management for '{project}'...[/yellow]")
+
+        errors_occurred = []
+
+        # Remove symlinks
+        symlinks_to_remove = [
+            project_path / "CLAUDE.local.md",
+        ]
+
+        for symlink in symlinks_to_remove:
+            if symlink.is_symlink() or symlink.exists():
+                try:
+                    symlink.unlink()
+                except Exception as e:
+                    errors_occurred.append(f"Could not remove {symlink.name}: {e}")
+
+        # Remove metadata
+        try:
+            metadata_file = metadata.metadata_file(settings.claudette_home)
+            metadata_file.unlink()
+
+            # Also remove the project folder if it's empty
+            project_folder = metadata.project_folder(settings.claudette_home)
+            if project_folder.exists() and not any(project_folder.iterdir()):
+                project_folder.rmdir()
+        except Exception as e:
+            errors_occurred.append(f"Could not remove metadata: {e}")
+
+        if errors_occurred:
+            console.print(
+                f"\n[yellow]⚠️  Removed management with {len(errors_occurred)} issues:[/yellow]"
+            )
+            for error in errors_occurred:
+                console.print(f"  • {error}")
+        else:
+            console.print(f"\n[green]✅ Removed claudette management for '{project}'[/green]")
+            console.print(f"[dim]Worktree remains at: {project_path}[/dim]")
+
+        return
+
+    # Standard remove logic for native projects or adopted with --delete-worktree
+    if metadata and metadata.adopted and delete_worktree:
+        console.print("\n[red]⚠️  WARNING: About to DELETE adopted worktree![/red]")
+        console.print(f"[yellow]Path: {project_path}[/yellow]")
 
     if not force:
         console.print(
@@ -1077,6 +1398,161 @@ def remove(
 
 
 @app.command()
+def disown(
+    project: Optional[str] = typer.Argument(
+        None, help="Project name (auto-detects if in project dir)"
+    ),
+    clean_deps: bool = typer.Option(
+        False, "--clean-deps", help="Also remove .venv and node_modules"
+    ),
+) -> None:
+    """🔓 Remove claudette management from project (keeps worktree by default).
+
+    This removes claudette's metadata and optionally dependencies, but leaves
+    the git worktree intact. Useful for adopted projects or when you want to
+    stop using claudette for a project.
+
+    For adopted projects, this is the recommended way to stop claudette management.
+    For native projects, consider using 'remove' instead to fully clean up.
+
+    Examples:
+        clo disown                      # Remove management, keep worktree
+        clo disown --clean-deps         # Also remove .venv and node_modules
+        clo disown my-project           # Disown specific project
+    """
+    # Determine project name
+    if not project:
+        # Check if PROJECT env var is set
+        project = os.environ.get("PROJECT")
+        if not project:
+            # Try to detect from current directory
+            cwd = Path.cwd()
+            if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+                project = cwd.name
+            else:
+                console.print(
+                    "[red]❌ No project specified and not in a claudette project directory[/red]"
+                )
+                console.print("[dim]Use: claudette disown <project-name>[/dim]")
+                console.print("[dim]Or: run from within a project directory[/dim]")
+                raise typer.Exit(1)
+
+    # Load metadata
+    try:
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
+    except FileNotFoundError:
+        console.print(f"[red]❌ Project '{project}' not found in claudette[/red]")
+        raise typer.Exit(1) from None
+
+    project_path = metadata.path
+
+    # Show what will be done
+    console.print(f"\n[bold yellow]🔓 Disowning project: {project}[/bold yellow]")
+    console.print(f"[dim]Path: {project_path}[/dim]")
+
+    if metadata.adopted:
+        console.print("[cyan]ℹ️  This is an adopted project[/cyan]")
+    else:
+        console.print("[yellow]⚠️  This is a native claudette project[/yellow]")
+        console.print(
+            "[dim]Consider using 'clo remove' instead to fully clean up the worktree[/dim]"
+        )
+
+    console.print("\n[bold]What will be removed:[/bold]")
+    console.print("  • Claudette metadata (.claudette file)")
+    console.print("  • Symlinks (CLAUDE.local.md)")
+    if clean_deps:
+        console.print("  • Python venv (.venv)")
+        console.print("  • Node modules (node_modules/)")
+
+    console.print("\n[bold green]What will be kept:[/bold green]")
+    console.print("  • Git worktree and all code")
+    console.print("  • PROJECT.md (if it exists)")
+    if not clean_deps:
+        console.print("  • Python venv (.venv)")
+        console.print("  • Node modules (node_modules/)")
+
+    # Confirm
+    if not typer.confirm(f"\nDisown project '{project}'?"):
+        console.print("[yellow]Cancelled[/yellow]")
+        raise typer.Exit(0)
+
+    errors_occurred = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Removing claudette management...", total=None)
+
+        # Step 1: Remove symlinks
+        progress.update(task, description="Removing symlinks...")
+        symlinks_to_remove = [
+            project_path / "CLAUDE.local.md",
+        ]
+
+        for symlink in symlinks_to_remove:
+            if symlink.is_symlink() or symlink.exists():
+                try:
+                    symlink.unlink()
+                    console.print(f"[dim]Removed: {symlink.name}[/dim]")
+                except Exception as e:
+                    errors_occurred.append(f"Could not remove {symlink.name}: {e}")
+
+        # Step 2: Clean deps if requested
+        if clean_deps:
+            import shutil
+
+            progress.update(task, description="Removing Python venv...")
+            venv_path = project_path / ".venv"
+            if venv_path.exists():
+                try:
+                    shutil.rmtree(venv_path)
+                    console.print("[dim]Removed: .venv[/dim]")
+                except Exception as e:
+                    errors_occurred.append(f"Could not remove .venv: {e}")
+
+            progress.update(task, description="Removing node_modules...")
+            node_modules = project_path / "superset-frontend" / "node_modules"
+            if node_modules.exists():
+                try:
+                    shutil.rmtree(node_modules)
+                    console.print("[dim]Removed: node_modules[/dim]")
+                except Exception as e:
+                    errors_occurred.append(f"Could not remove node_modules: {e}")
+
+        # Step 3: Remove metadata
+        progress.update(task, description="Removing metadata...")
+        try:
+            metadata_file = metadata.metadata_file(settings.claudette_home)
+            metadata_file.unlink()
+
+            # Also remove the project folder if it's empty
+            project_folder = metadata.project_folder(settings.claudette_home)
+            if project_folder.exists() and not any(project_folder.iterdir()):
+                project_folder.rmdir()
+
+            console.print("[dim]Removed: .claudette metadata[/dim]")
+        except Exception as e:
+            errors_occurred.append(f"Could not remove metadata: {e}")
+
+    # Report results
+    if errors_occurred:
+        console.print(
+            f"\n[yellow]⚠️  Project '{project}' disowned with {len(errors_occurred)} issues:[/yellow]"
+        )
+        for error in errors_occurred:
+            console.print(f"  • {error}")
+    else:
+        console.print(f"\n[bold green]✅ Successfully disowned project '{project}'[/bold green]")
+        console.print(f"[dim]Worktree remains at: {project_path}[/dim]")
+        console.print(
+            "\n[dim]The project is no longer managed by claudette but the worktree is intact.[/dim]"
+        )
+
+
+@app.command()
 def list() -> None:
     """📋 List all claudette projects."""
     # Create a fresh console to ensure we get the current terminal width
@@ -1215,10 +1691,7 @@ def activate(
 
     Note: This creates a nested shell. Use Ctrl+D or 'exit' to return to your original shell.
     """
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
+    project_path = _resolve_project_path(project)
 
     # Load metadata
     try:
@@ -1368,11 +1841,8 @@ def shell(
             console.print("[dim]Or run from within a project directory[/dim]")
             raise typer.Exit(1)
 
-    # Call activate logic directly
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
+    # Resolve project path
+    project_path = _resolve_project_path(project)
 
     # Load metadata
     try:
@@ -1506,11 +1976,8 @@ def psql(
             console.print("[dim]Or run from within a project directory[/dim]")
             raise typer.Exit(1)
 
-    # Call activate logic directly
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
+    # Resolve project path
+    project_path = _resolve_project_path(project)
 
     # Load metadata
     try:
@@ -1674,10 +2141,9 @@ def claude(
 
     if project_name:
         # Change to project directory
-        project_path = settings.worktree_base / project_name
-        if project_path.exists():
-            os.chdir(project_path)
-            cwd = project_path
+        project_path = _resolve_project_path(project_name)
+        os.chdir(project_path)
+        cwd = project_path
     else:
         # No PROJECT set, ask user to activate a project
         console.print("[red]❌ No project activated[/red]")
@@ -1720,11 +2186,8 @@ def nuke_db(
                 )
                 raise typer.Exit(1)
 
-    # Verify project exists
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
+    # Resolve and verify project exists
+    project_path = _resolve_project_path(project)
 
     # Load metadata to ensure it's a valid project
     try:
@@ -2506,12 +2969,6 @@ def open(
                 )
                 raise typer.Exit(1)
 
-    # Verify project exists
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
-
     # Load metadata to get port
     try:
         metadata = ProjectMetadata.load(project, settings.claudette_home)
@@ -2568,10 +3025,8 @@ def status(
             console.print("[dim]Use: claudette status <project-name>[/dim]")
             raise typer.Exit(1)
 
-    project_path = settings.worktree_base / project
-    if not project_path.exists():
-        console.print(f"[red]Project '{project}' not found[/red]")
-        raise typer.Exit(1)
+    # Resolve and verify project exists
+    project_path = _resolve_project_path(project)
 
     # Load metadata
     try:

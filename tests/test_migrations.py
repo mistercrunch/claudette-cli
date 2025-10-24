@@ -7,7 +7,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from claudette.cli import (
-    CLAUDETTE_VERSION,
+    CLAUDETTE_SCHEMA_VERSION as CLAUDETTE_VERSION,
+)
+from claudette.cli import (
     _ensure_claudette_initialized,
     _migrate_v01_to_v02,
     _write_version_file,

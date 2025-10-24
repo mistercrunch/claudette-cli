@@ -27,6 +27,7 @@ class ProjectMetadata(BaseModel):
     description: Optional[str] = None  # From PROJECT.md summary
     frozen: bool = False  # Whether project dependencies are removed to save space
     pr_number: Optional[int] = None  # Associated GitHub PR number
+    adopted: bool = False  # Whether this is a user-managed worktree (vs claudette-created)
 
     def project_folder(self, claudette_home: Path) -> Path:
         """Path to the project's folder in ~/.claudette/projects/."""
@@ -47,6 +48,7 @@ PROJECT_NAME="{self.name}"
 NODE_PORT="{self.port}"
 PROJECT_PATH="{self.path}"
 PROJECT_FROZEN="{str(self.frozen).lower()}"
+PROJECT_ADOPTED="{str(self.adopted).lower()}"
 """
         if self.description:
             # Escape quotes and newlines for shell format
@@ -85,6 +87,10 @@ PROJECT_FROZEN="{str(self.frozen).lower()}"
         frozen_str = metadata.get("PROJECT_FROZEN", "false").lower()
         frozen = frozen_str in ("true", "1", "yes", "on")
 
+        # Parse adopted state - handle as boolean
+        adopted_str = metadata.get("PROJECT_ADOPTED", "false").lower()
+        adopted = adopted_str in ("true", "1", "yes", "on")
+
         # Parse PR number if present
         pr_number = None
         if "PROJECT_PR" in metadata:
@@ -100,6 +106,7 @@ PROJECT_FROZEN="{str(self.frozen).lower()}"
             description=metadata.get("PROJECT_DESCRIPTION"),
             frozen=frozen,
             pr_number=pr_number,
+            adopted=adopted,
         )
 
     @classmethod
