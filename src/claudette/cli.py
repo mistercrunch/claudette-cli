@@ -19,18 +19,18 @@ from .config import PROJECT_MANAGED_FILES, ClaudetteSettings, ProjectMetadata
 
 def get_user_shell() -> tuple[str, str]:
     """Get user's preferred shell and its config file.
-    
+
     Returns:
         tuple: (shell_command, rc_file_path)
     """
     # Get shell from SHELL environment variable
     shell_path = os.environ.get("SHELL", "/bin/bash")
     shell_name = Path(shell_path).name
-    
+
     if shell_name == "zsh":
         return ("zsh", "~/.zshrc")
     elif shell_name == "fish":
-        return ("fish", "~/.config/fish/config.fish") 
+        return ("fish", "~/.config/fish/config.fish")
     else:
         # Default to bash for bash and unknown shells
         return ("bash", "~/.bashrc")
@@ -134,6 +134,48 @@ def get_package_version() -> str:
 
 # Current claudette schema version (for migrations)
 CLAUDETTE_SCHEMA_VERSION = "0.2.0"
+
+
+def _detect_current_project() -> Optional[str]:
+    """Detect current project from environment or current directory.
+
+    Returns project name if detected, None otherwise.
+
+    Detection order:
+    1. PROJECT environment variable (set by activate)
+    2. Match current directory against all known project paths
+    3. Check if in worktree_base subdirectory (backward compatibility)
+    """
+    # Check environment variable first
+    project = os.environ.get("PROJECT")
+    if project:
+        return project
+
+    # Get current working directory
+    cwd = Path.cwd().resolve()
+
+    # Try to match against all known project paths
+    projects_dir = settings.claudette_home / "projects"
+    if projects_dir.exists():
+        for project_folder in projects_dir.iterdir():
+            if not project_folder.is_dir():
+                continue
+
+            metadata_file = project_folder / ".claudette"
+            if metadata_file.exists():
+                try:
+                    metadata = ProjectMetadata.load(project_folder.name, settings.claudette_home)
+                    # Check if current directory is within project path
+                    if cwd == metadata.path.resolve() or metadata.path.resolve() in cwd.parents:
+                        return metadata.name
+                except Exception:
+                    continue
+
+    # Fallback: check if in worktree_base subdirectory (backward compatibility)
+    if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
+        return cwd.name
+
+    return None
 
 
 def _resolve_project_path(project_name: str) -> Path:
@@ -787,7 +829,7 @@ cd superset-frontend && npm test
 
         # Get user's preferred shell for activation
         user_shell, user_rc = get_user_shell()
-        
+
         # Create activation script (same as in activate command)
         activate_script = f"""
 # Source user's rc file first
@@ -851,18 +893,18 @@ source {temp_script}
 exec zsh -i
 """
                 temp_wrapper = temp_script + "_wrapper.zsh"
-                with Path(temp_wrapper).open('w') as f:
+                with Path(temp_wrapper).open("w") as f:
                     f.write(wrapper_script)
-                
+
                 subprocess.run(
                     [user_shell, temp_wrapper],
                     cwd=project_path,
                     check=False,
                 )
-                
+
                 # Clean up wrapper script
                 Path(temp_wrapper).unlink(missing_ok=True)
-                
+
             elif user_shell == "bash":
                 # For bash, use --rcfile
                 subprocess.run(
@@ -1709,7 +1751,7 @@ def activate(
 
     # Get user's preferred shell
     user_shell, user_rc = get_user_shell()
-    
+
     # Create activation script (only modify PS1 if it exists and we're in bash/zsh)
     activate_script = f"""
 # Source user's rc file first
@@ -1769,18 +1811,18 @@ source {temp_script}
 exec zsh -i
 """
             temp_wrapper = temp_script + "_wrapper.zsh"
-            with Path(temp_wrapper).open('w') as f:
+            with Path(temp_wrapper).open("w") as f:
                 f.write(wrapper_script)
-            
+
             subprocess.run(
                 [user_shell, temp_wrapper],
                 cwd=project_path,
                 check=False,
             )
-            
+
             # Clean up wrapper script
             Path(temp_wrapper).unlink(missing_ok=True)
-            
+
         elif user_shell == "bash":
             # For bash, use --rcfile
             subprocess.run(
@@ -1829,17 +1871,13 @@ def shell(
     # Get command arguments from context
     command_args = ctx.args if ctx.args else []
 
-    # Try to detect current project
-    project = os.environ.get("PROJECT")
+    # Detect current project
+    project = _detect_current_project()
     if not project:
-        cwd = Path.cwd()
-        if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
-            project = cwd.name
-        else:
-            console.print("[red]❌ Not in a claudette project directory[/red]")
-            console.print("[dim]Use: claudette activate <project-name> first[/dim]")
-            console.print("[dim]Or run from within a project directory[/dim]")
-            raise typer.Exit(1)
+        console.print("[red]❌ Not in a claudette project directory[/red]")
+        console.print("[dim]Use: claudette activate <project-name> first[/dim]")
+        console.print("[dim]Or run from within a project directory[/dim]")
+        raise typer.Exit(1)
 
     # Resolve project path
     project_path = _resolve_project_path(project)
@@ -1907,8 +1945,10 @@ def shell(
         # Interactive shell mode - use user's preferred shell if available in container
         user_shell, _ = get_user_shell()
         # Try to use user's shell, but fall back to bash if not available in container
-        container_shell = f"/bin/{user_shell}" if user_shell in ["bash", "zsh", "sh"] else "/bin/bash"
-        
+        container_shell = (
+            f"/bin/{user_shell}" if user_shell in ["bash", "zsh", "sh"] else "/bin/bash"
+        )
+
         exec_cmd = [
             "docker-compose",
             "-p",
@@ -1964,17 +2004,13 @@ def psql(
     # Get command arguments from context
     command_args = ctx.args if ctx.args else []
 
-    # Try to detect current project
-    project = os.environ.get("PROJECT")
+    # Detect current project
+    project = _detect_current_project()
     if not project:
-        cwd = Path.cwd()
-        if len(cwd.parts) >= 2 and cwd.parts[-2] == settings.worktree_base.name:
-            project = cwd.name
-        else:
-            console.print("[red]❌ Not in a claudette project directory[/red]")
-            console.print("[dim]Use: claudette activate <project-name> first[/dim]")
-            console.print("[dim]Or run from within a project directory[/dim]")
-            raise typer.Exit(1)
+        console.print("[red]❌ Not in a claudette project directory[/red]")
+        console.print("[dim]Use: claudette activate <project-name> first[/dim]")
+        console.print("[dim]Or run from within a project directory[/dim]")
+        raise typer.Exit(1)
 
     # Resolve project path
     project_path = _resolve_project_path(project)
@@ -2079,22 +2115,23 @@ def docker(
     args: List[str] = typer.Argument(None, help="Arguments to pass to docker-compose"),
 ) -> None:
     """🐳 Run docker-compose with project settings."""
-    # Get current project
-    cwd = Path.cwd()
-    if len(cwd.parts) < 2 or cwd.parts[-2] != settings.worktree_base.name:
-        console.print("[red]Not in a claudette project directory[/red]")
+    # Detect current project
+    project = _detect_current_project()
+    if not project:
+        console.print("[red]❌ Not in a claudette project directory[/red]")
+        console.print("[dim]Use: claudette activate <project-name> first[/dim]")
+        console.print("[dim]Or run from within a project directory[/dim]")
         raise typer.Exit(1)
 
     # Load metadata
-    project_name = cwd.name
     try:
-        metadata = ProjectMetadata.load(project_name, settings.claudette_home)
+        metadata = ProjectMetadata.load(project, settings.claudette_home)
     except FileNotFoundError:
-        console.print(f"[red]No metadata found for project {project_name}[/red]")
+        console.print(f"[red]No metadata found for project {project}[/red]")
         raise typer.Exit(1) from None
 
     # Check if project is frozen - Docker needs dependencies
-    if not _ensure_project_thawed(project_name):
+    if not _ensure_project_thawed(project):
         console.print("[yellow]⚠️  Docker may not work properly without dependencies[/yellow]")
 
     # Run docker-compose
