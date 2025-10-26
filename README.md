@@ -40,6 +40,7 @@ clo --help
 - 🎯 **Auto Port Assignment** - Automatically finds available ports when not specified
 - 🧊 **Freeze/Thaw Projects** - Save ~3GB per project by removing dependencies when not in use
 - 🔗 **GitHub PR Integration** - Track and quickly access pull requests associated with projects
+- 🚀 **iTerm Launch** - One command to create project and open complete dev environment (macOS)
 
 ## Installation
 
@@ -229,6 +230,16 @@ Manage GitHub PR associations:
 - `clo pr link <pr_number>` - Associate a PR with current/specified project
 - `clo pr clear` - Remove PR association from current/specified project
 - `clo pr open` - Open associated PR in browser
+
+### `claudette launch <project> [port]` (macOS/iTerm2 only)
+Launch complete dev environment in iTerm with multiple tabs:
+- Creates project if it doesn't exist (auto-assigns port if needed)
+- Opens new iTerm window with 3 pre-configured tabs:
+  - Tab 1: Shell with project activated
+  - Tab 2: Docker containers running
+  - Tab 3: Claude Code AI assistant
+- Requires iTerm2 with Python API enabled
+- Install support: `pip install superset-claudette[iterm]`
 
 ### `claudette nuke` (DANGEROUS!)
 Completely removes claudette and all projects:
