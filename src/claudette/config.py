@@ -147,6 +147,20 @@ PROJECT_ADOPTED="{str(self.adopted).lower()}"
         return used_ports
 
     @classmethod
+    def from_file(cls, metadata_file: Path) -> "ProjectMetadata":
+        """Load metadata directly from a file path."""
+        project_name = metadata_file.stem
+        claudette_home = metadata_file.parent.parent  # Go up from projects/ to .claudette/
+        
+        # Handle both old and new style paths
+        if metadata_file.name == ".claudette":
+            # New style: ~/.claudette/projects/project-name/.claudette
+            project_name = metadata_file.parent.name
+            claudette_home = metadata_file.parent.parent.parent
+        
+        return cls.load(project_name, claudette_home)
+    
+    @classmethod
     def get_managed_files(cls) -> List[Tuple[str, bool]]:
         """Get list of managed files and whether they should be symlinked.
 

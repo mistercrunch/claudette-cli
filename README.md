@@ -211,6 +211,23 @@ Syncs PROJECT.md content with claudette metadata:
 - Refreshes what shows in `claudette list`
 - Run after editing PROJECT.md
 
+### `claudette doctor`
+Diagnoses claudette environment health:
+- Checks claudette initialization and configuration
+- Verifies required tools (Docker, Git, Node.js, Python, uv)
+- Detects orphaned projects (metadata without worktrees)
+- Reports port conflicts between projects
+- Suggests fixes for any issues found
+- Run this when experiencing issues with claudette
+
+### `claudette clean`
+Cleans up orphaned project metadata:
+- Finds projects with missing worktrees or corrupted metadata
+- Removes stale metadata files that `claudette remove` may have missed
+- Use `--dry-run` to preview what would be cleaned
+- Use `--force` to skip confirmation prompt
+- Only removes metadata, never actual project files
+
 ### `claudette freeze <project>`
 Freezes a project to save disk space (~3GB per project):
 - Removes node_modules directory
